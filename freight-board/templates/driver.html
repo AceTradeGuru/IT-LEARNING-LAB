@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Driver dashboard{% endblock %}
+{% block content %}
+<h1>Welcome back, {{ driver.name }}</h1>
+<p class="sub">{{ driver.home_city }}, {{ driver.home_state }} &middot; Rating {{ driver.rating }} ★</p>
+
+<div class="card">
+  <h2 style="margin-top:0;">Post your truck</h2>
+  <form method="post" action="{{ url_for('create_capacity_post') }}">
+    <div class="grid grid-2">
+      <div>
+        <label>Truck</label>
+        <select name="truck_id" required>
+          {% for t in trucks %}
+          <option value="{{ t.id }}">{{ t.equipment_type.replace('_',' ')|title }} — {{ t.length_ft }} ft, {{ "{:,}".format(t.max_weight_lbs) }} lbs max</option>
+          {% endfor %}
+        </select>
+        <label>Empty in (city)</label>
+        <input name="origin_city" placeholder="Atlanta" required>
+        <label>State</label>
+        <input name="origin_state" placeholder="GA" maxlength="2" required>
+      </div>
+      <div>
+        <label>Available date</label>
+        <input type="date" name="available_date" required>
+        <label>Preferred destination state (optional)</label>
+        <input name="dest_pref_state" placeholder="Any" maxlength="2">
+        <div class="grid grid-2">
+          <div>
+            <label>Rate floor ($/mile)</label>
+            <input type="number" step="0.05" name="min_rate_per_mile" placeholder="2.50" required>
+          </div>
+          <div>
+            <label>Max deadhead (miles)</label>
+            <input type="number" name="max_deadhead_mi" placeholder="100">
+          </div>
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="margin-top:1rem;">Post Truck</button>
+  </form>
+</div>
+
+{% for pd in posts_data %}
+<div class="card">
+  <h2 style="margin-top:0;">
+    Truck in {{ pd.post.origin_city }}, {{ pd.post.origin_state }} — {{ pd.post.available_date }}
+    <span class="badge {{ pd.post.status }}">{{ pd.post.status }}</span>
+  </h2>
+  <p class="muted">{{ pd.post.equipment_type.replace('_',' ')|title }} &middot;
+     floor ${{ "%.2f"|format(pd.post.min_rate_per_mile) }}/mi &middot;
+     max deadhead {{ pd.post.max_deadhead_mi }} mi
+     {% if pd.post.dest_pref_state %}&middot; prefers {{ pd.post.dest_pref_state }}{% endif %}</p>
+
+  {% if pd.bids %}
+  <h2>Broker bids on this truck</h2>
+  <table>
+    <tr><th>Broker</th><th>Load</th><th>Pickup</th><th>Offer</th><th>$/mi</th><th></th></tr>
+    {% for b in pd.bids %}
+    <tr>
+      <td>{{ b.company_name }}
+        <span class="badge {{ 'bonded' if b.bond_verified else 'unbonded' }}">
+          {{ 'Bonded' if b.bond_verified else 'Not bonded' }}</span></td>
+      <td>{{ b.origin_city }}, {{ b.origin_state }} → {{ b.dest_city }}, {{ b.dest_state }}</td>
+      <td>{{ b.pickup_date }}</td>
+      <td class="rate">${{ "{:,.0f}".format(b.offered_rate) }}</td>
+      <td>${{ "%.2f"|format(b.offered_rate / b.distance_miles) }}</td>
+      <td>
+        {% if b.status == 'pending' %}
+        <form class="inline" method="post" action="{{ url_for('respond_to_bid', bid_id=b.id, action='accepted') }}">
+          <button class="btn btn-green">Accept</button></form>
+        <form class="inline" method="post" action="{{ url_for('respond_to_bid', bid_id=b.id, action='declined') }}">
+          <button class="btn btn-red">Decline</button></form>
+        {% else %}<span class="badge {{ b.status }}">{{ b.status }}</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if pd.post.status == 'open' %}
+  <h2>Loads matching your terms (best rate first)</h2>
+  {% if pd.matches %}
+  <table>
+    <tr><th>Lane</th><th>Pickup</th><th>Miles</th><th>Pays</th><th>$/mi</th><th>Broker</th></tr>
+    {% for m in pd.matches %}
+    <tr>
+      <td>{{ m.origin }} → {{ m.destination }}</td>
+      <td>{{ m.pickup_date }}</td>
+      <td>{{ "{:,}".format(m.distance_miles) }}</td>
+      <td class="rate">${{ "{:,.0f}".format(m.offered_rate) }}</td>
+      <td>${{ "%.2f"|format(m.rate_per_mile) }}</td>
+      <td>{{ m.company_name }}
+        <span class="badge {{ 'bonded' if m.bond_verified else 'unbonded' }}">
+          {{ 'Bonded' if m.bond_verified else 'Not bonded' }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No loads currently meet your terms. Brokers can still bid directly.</p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

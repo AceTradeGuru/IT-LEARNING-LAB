@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}The reverse load board{% endblock %}
+{% block content %}
+<div class="card" style="background:var(--navy); color:#fff; padding:2.5rem;">
+  <h1 style="font-size:2rem;">Drivers post the truck.<br>Brokers compete for it.</h1>
+  <p style="color:#cbd5e1; margin:0.8rem 0 1.5rem; max-width:34rem;">
+    FreightFlip reverses the load board. Instead of drivers hunting through
+    thousands of loads, you post where your truck will be empty and your rate
+    floor — and verified brokers bring their best freight to you.
+  </p>
+  <a class="btn btn-primary" href="{{ url_for('driver_dashboard') }}">I'm a Driver</a>
+  <a class="btn" style="background:#fff; color:var(--navy); margin-left:0.5rem;"
+     href="{{ url_for('broker_dashboard') }}">I'm a Broker</a>
+</div>
+
+<div class="grid grid-4">
+  <div class="card stat"><div class="num">{{ stats.drivers }}</div><div class="lbl">Drivers</div></div>
+  <div class="card stat"><div class="num">{{ stats.brokers }}</div><div class="lbl">Verified Brokers</div></div>
+  <div class="card stat"><div class="num">{{ stats.open_posts }}</div><div class="lbl">Open Trucks</div></div>
+  <div class="card stat"><div class="num">{{ stats.loads }}</div><div class="lbl">Available Loads</div></div>
+</div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2 style="margin-top:0;">For Drivers</h2>
+    <p class="muted">Set your lane, your date, your rate floor. Only freight that
+    meets YOUR terms reaches you — ranked best-paying first. Accept a bid and roll.</p>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">For Brokers</h2>
+    <p class="muted">See real available capacity before your competitors do.
+    Bid your load directly onto a truck that's already empty where you need it.</p>
+  </div>
+</div>
+{% endblock %}

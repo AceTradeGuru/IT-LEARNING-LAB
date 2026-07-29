@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Broker dashboard{% endblock %}
+{% block content %}
+<h1>{{ broker.company_name }}</h1>
+<p class="sub">MC {{ broker.mc_number }} &middot;
+  <span class="badge {{ 'bonded' if broker.bond_verified else 'unbonded' }}">
+    {{ 'Bond verified' if broker.bond_verified else 'Bond not verified' }}</span>
+</p>
+
+<form method="get" action="{{ url_for('broker_dashboard') }}" class="card" style="padding:0.8rem 1.3rem;">
+  <label style="margin-top:0;">Acting as broker</label>
+  <select name="broker_id" onchange="this.form.submit()">
+    {% for b in brokers %}
+    <option value="{{ b.id }}" {% if b.id == broker.id %}selected{% endif %}>{{ b.company_name }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+<div class="card">
+  <h2 style="margin-top:0;">Available trucks on the market</h2>
+  <p class="muted">Real capacity, posted by drivers. Bid one of your loads directly onto a truck.</p>
+  {% if open_posts %}
+  <table>
+    <tr><th>Driver</th><th>Equipment</th><th>Empty in</th><th>Date</th><th>Rate floor</th><th>Bid a load</th></tr>
+    {% for p in open_posts %}
+    <tr>
+      <td>{{ p.driver_name }} <span class="muted">{{ p.rating }} ★</span></td>
+      <td>{{ p.equipment_type.replace('_',' ')|title }} {{ p.length_ft }} ft</td>
+      <td>{{ p.origin_city }}, {{ p.origin_state }}</td>
+      <td>{{ p.available_date }}</td>
+      <td>${{ "%.2f"|format(p.min_rate_per_mile) }}/mi</td>
+      <td>
+        {% if my_available_loads %}
+        <form class="inline" method="post" action="{{ url_for('place_bid') }}">
+          <input type="hidden" name="capacity_post_id" value="{{ p.id }}">
+          <input type="hidden" name="broker_id" value="{{ broker.id }}">
+          <div style="display:flex; gap:0.4rem; align-items:center;">
+            <select name="load_id" style="width:auto;">
+              {% for l in my_available_loads %}
+              <option value="{{ l.id }}">{{ l.origin_city }}→{{ l.dest_city }} (${{ "{:,.0f}".format(l.offered_rate) }})</option>
+              {% endfor %}
+            </select>
+            <input type="number" step="5" name="offered_rate" placeholder="Offer $" style="width:7rem;" required>
+            <button class="btn btn-green">Bid</button>
+          </div>
+        </form>
+        {% else %}<span class="muted">Post a load first</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No open trucks right now.</p>
+  {% endif %}
+</div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2 style="margin-top:0;">Post a load</h2>
+    <form method="post" action="{{ url_for('create_load') }}">
+      <input type="hidden" name="broker_id" value="{{ broker.id }}">
+      <div class="grid grid-2">
+        <div>
+          <label>Origin city</label><input name="origin_city" required>
+          <label>Origin state</label><input name="origin_state" maxlength="2" required>
+          <label>Pickup date</label><input type="date" name="pickup_date" required>
+          <label>Equipment</label>
+          <select name="equipment_type">
+            {% for e in ['dry_van','reefer','flatbed','step_deck','power_only','box_truck','hotshot','tanker'] %}
+            <option value="{{ e }}">{{ e.replace('_',' ')|title }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Destination city</label><input name="dest_city" required>
+          <label>Destination state</label><input name="dest_state" maxlength="2" required>
+          <label>Weight (lbs)</label><input type="number" name="weight_lbs" required>
+          <label>Distance (miles)</label><input type="number" name="distance_miles" required>
+          <label>Rate ($ total)</label><input type="number" step="5" name="offered_rate" required>
+        </div>
+      </div>
+      <label>Commodity</label><input name="commodity" placeholder="e.g. Paper products">
+      <button class="btn btn-primary" style="margin-top:1rem;">Post Load</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">My loads</h2>
+    {% if loads %}
+    <table>
+      <tr><th>Lane</th><th>Pickup</th><th>Rate</th><th>Status</th></tr>
+      {% for l in loads %}
+      <tr>
+        <td>{{ l.origin_city }}, {{ l.origin_state }} → {{ l.dest_city }}, {{ l.dest_state }}</td>
+        <td>{{ l.pickup_date }}</td>
+        <td class="rate">${{ "{:,.0f}".format(l.offered_rate) }}</td>
+        <td><span class="badge {{ l.status }}">{{ l.status }}</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No loads posted yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
