@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Run the carrier before you tender the load{% endblock %}
+
+{% block content %}
+<div class="card" style="background:var(--navy); color:#fff; border:none;">
+  <h1 style="font-size:2rem; color:#fff;">Run the carrier before you tender the load.</h1>
+  <p style="color:#94a3b8; margin-top:0.6rem; max-width:62ch; line-height:1.6;">
+    The MC number checks out. The insurance certificate looks right. The authority is
+    active. And the freight still disappears — because the MC number was never the
+    problem. The <em>person using it</em> was.
+  </p>
+  <p style="color:#cbd5e1; margin-top:0.9rem; max-width:62ch; line-height:1.6;">
+    CarrierGuard compares three things a lookup tool never compares against each other:
+    the government record, the contact details the carrier actually reached you from,
+    and what that MC number has been doing to every other broker on the network.
+    <strong style="color:var(--teal);">Fraud lives in the disagreement between them.</strong>
+  </p>
+  <div style="margin-top:1.3rem; display:flex; gap:0.7rem; flex-wrap:wrap;">
+    <a class="btn btn-primary" href="{{ url_for('check') }}">Run a check</a>
+    <a class="btn btn-ghost" href="{{ url_for('network') }}">See the network</a>
+  </div>
+</div>
+
+<div class="card grid grid-4">
+  <div class="stat"><div class="num">{{ stats.checks }}</div><div class="lbl">Carriers vetted</div></div>
+  <div class="stat"><div class="num" style="color:var(--red);">{{ stats.blocked }}</div><div class="lbl">Tenders blocked</div></div>
+  <div class="stat"><div class="num">${{ '{:,.0f}'.format(stats.value_protected) }}</div><div class="lbl">Freight value protected</div></div>
+  <div class="stat"><div class="num">{{ stats.brokers }}</div><div class="lbl">Brokers on the network</div></div>
+</div>
+
+<h2>Try it — four carriers, four different ways this goes wrong</h2>
+<p class="sub">Each button loads a real vetting scenario. Two of them look perfect in SAFER.</p>
+
+<div class="grid grid-2">
+  {% for s in scenarios %}
+  <div class="card" style="display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:start; gap:1rem;">
+      <div style="font-weight:700; font-size:1rem;">{{ s.title }}</div>
+      <span class="badge {{ s.expect }}">{{ s.expect }}</span>
+    </div>
+    <p class="muted" style="margin:0.6rem 0 1rem; line-height:1.5; flex:1;">{{ s.blurb }}</p>
+    <div class="mono muted" style="margin-bottom:0.9rem;">
+      {{ s.mc }} &middot; {{ s.email }}
+    </div>
+    <a class="btn btn-dark btn-sm" style="align-self:start;"
+       href="{{ url_for('check', mc_number=s.mc, contact_email=s.email,
+                        contact_phone=s.phone, contact_name=s.name, load_value=s.value) }}">
+      Load this check &rarr;
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>Why this gets harder to beat every month</h2>
+<div class="card">
+  <p style="line-height:1.65; max-width:70ch;">
+    Authority status, insurance, and safety scores are commodities — anyone can buy that
+    feed. The signal nobody can buy is <strong>what this MC number did to the last broker
+    who trusted it</strong>. Every check run here leaves a trace: which contact details
+    were used, by whom, and whether it ended badly.
+  </p>
+  <p style="line-height:1.65; max-width:70ch; margin-top:0.8rem;">
+    A hijacked authority can forge a certificate of insurance. It cannot forge a boring,
+    stable, two-year dispatch contact history across four brokerages. That history is the
+    moat, and it is worth more the day after you join than the day you joined.
+  </p>
+</div>
+{% endblock %}

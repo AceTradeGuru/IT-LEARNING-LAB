@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Report fraud{% endblock %}
+
+{% block content %}
+<h1>Report fraud</h1>
+<p class="sub">
+  You already paid for this lesson. Filing it here means nobody else on the network has to
+  — and the carrier's score changes for all of them the second you submit.
+</p>
+
+<div class="grid grid-2" style="align-items:start;">
+  <div class="card">
+    <form method="post" action="{{ url_for('report') }}">
+      <label for="mc_number">MC number involved</label>
+      <input id="mc_number" name="mc_number" class="mono" required
+             placeholder="MC-901347" value="{{ form.get('mc_number', '') }}">
+
+      <label for="incident_type">What happened</label>
+      <select id="incident_type" name="incident_type">
+        <option value="double_brokered">Double-brokered the load</option>
+        <option value="identity_theft">Impersonated a legitimate carrier</option>
+        <option value="payment_redirect">Redirected payment mid-haul</option>
+        <option value="cargo_theft">Cargo theft</option>
+        <option value="fictitious_pickup">Fictitious pickup</option>
+        <option value="no_show">Booked and never showed</option>
+      </select>
+
+      <div class="grid grid-2" style="gap:0.8rem;">
+        <div>
+          <label for="reported_email">Email they used</label>
+          <input id="reported_email" name="reported_email" class="mono"
+                 value="{{ form.get('reported_email', '') }}">
+        </div>
+        <div>
+          <label for="reported_phone">Phone they used</label>
+          <input id="reported_phone" name="reported_phone" class="mono"
+                 value="{{ form.get('reported_phone', '') }}">
+        </div>
+      </div>
+
+      <label for="amount_lost">Amount lost ($)</label>
+      <input id="amount_lost" name="amount_lost" class="mono" placeholder="48200"
+             value="{{ form.get('amount_lost', '') }}">
+
+      <label for="notes">What happened, in your words</label>
+      <textarea id="notes" name="notes" rows="4"
+                placeholder="Accepted the tender, then re-brokered it to an unvetted carrier…"></textarea>
+
+      <div style="margin-top:1.2rem;">
+        <button class="btn btn-primary" type="submit">File this report</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">How a report changes things</h2>
+    <p style="line-height:1.6;">
+      An unconfirmed report adds <strong>+22</strong> to the carrier's risk score for
+      every subscriber immediately — enough to push a borderline carrier into
+      <span class="badge review">review</span> and force a callback before anyone else
+      tenders to them.
+    </p>
+    <p style="line-height:1.6; margin-top:0.8rem;">
+      Once CarrierGuard ops confirms it, the weight rises to <strong>+50</strong> and the
+      carrier is a hard <span class="badge block">block</span> across the network,
+      regardless of how clean their FMCSA record looks.
+    </p>
+    <p class="muted" style="line-height:1.6; margin-top:0.8rem;">
+      Try it: file a report against <span class="mono">MC-901347</span> (Summit Haul,
+      currently a 58 <span class="badge review">review</span>). You'll be sent straight
+      back to a fresh check on that carrier so you can watch the verdict flip.
+    </p>
+  </div>
+</div>
+{% endblock %}

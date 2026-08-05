@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["freight-board/app.py"],
       "port": 5001
+    },
+    {
+      "name": "carrierguard",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["carrier-guard/app.py"],
+      "port": 5002
     }
   ]
 }
