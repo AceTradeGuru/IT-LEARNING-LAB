@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Registry{% endblock %}
+
+{% block content %}
+<h1>Carrier registry</h1>
+<p class="sub">
+  Every carrier scored against <em>its own</em> contact of record — the honest baseline,
+  before anyone impersonates anybody. Two of these look perfect on the government record
+  and are not.
+</p>
+
+<div class="card">
+  <table>
+    <tr>
+      <th>Carrier</th>
+      <th>Authority</th>
+      <th>Cargo ins.</th>
+      <th>Fleet</th>
+      <th>Verdict</th>
+      <th>Leading finding</th>
+      <th></th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td>
+        <strong>{{ r.carrier.legal_name }}</strong><br>
+        <span class="mono muted">{{ r.carrier.mc_number }}</span>
+      </td>
+      <td>
+        {{ r.carrier.authority_status|upper }}<br>
+        <span class="muted">since {{ r.carrier.authority_granted }}</span>
+      </td>
+      <td>
+        {{ r.carrier.cargo_expires }}<br>
+        <span class="muted">${{ '{:,}'.format(r.carrier.cargo_coverage_usd) }}</span>
+      </td>
+      <td>
+        {{ r.carrier.power_units }} units<br>
+        <span class="muted">{{ '%.0f'|format(r.carrier.oos_rate * 100) }}% OOS</span>
+      </td>
+      <td>
+        <span class="badge {{ r.verdict }}">{{ r.verdict }}</span><br>
+        <span class="muted">{{ r.score }}/100</span>
+      </td>
+      <td style="max-width:24rem;">{{ r.top }}</td>
+      <td>
+        <a class="btn btn-ghost btn-sm"
+           href="{{ url_for('check', mc_number=r.carrier.mc_number,
+                            contact_email=r.carrier.registered_email,
+                            contact_phone=r.carrier.registered_phone,
+                            load_value=75000) }}">Check</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<p class="muted" style="line-height:1.6; max-width:70ch;">
+  In production this table is a nightly refresh from FMCSA SAFER plus insurance filings
+  and phone/address intelligence. It is table stakes — the part any competitor can also
+  buy. The <a href="{{ url_for('network') }}">network</a> is the part they can't.
+</p>
+{% endblock %}

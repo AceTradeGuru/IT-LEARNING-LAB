@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}The network{% endblock %}
+
+{% block content %}
+<h1>The network</h1>
+<p class="sub">
+  Every check any subscriber runs makes the next subscriber's check smarter. This is the
+  only data in the product that cannot be bought from a vendor.
+</p>
+
+<div class="card grid grid-4">
+  <div class="stat"><div class="num">{{ stats.checks }}</div><div class="lbl">Checks run</div></div>
+  <div class="stat"><div class="num" style="color:var(--red);">{{ stats.blocked }}</div><div class="lbl">Tenders blocked</div></div>
+  <div class="stat"><div class="num">${{ '{:,.0f}'.format(stats.value_protected) }}</div><div class="lbl">Freight value protected</div></div>
+  <div class="stat"><div class="num" style="color:var(--red);">${{ '{:,.0f}'.format(stats.losses) }}</div><div class="lbl">Confirmed losses reported</div></div>
+</div>
+
+<h2>Confirmed and reported fraud</h2>
+<div class="card">
+  <table>
+    <tr>
+      <th>MC</th><th>Carrier</th><th>Incident</th><th>Lost</th>
+      <th>Reported by</th><th>Status</th><th>Detail</th>
+    </tr>
+    {% for r in reports %}
+    <tr>
+      <td class="mono">{{ r.mc_number }}</td>
+      <td>{{ r.legal_name or '—' }}</td>
+      <td>{{ r.incident_type.replace('_', ' ')|title }}</td>
+      <td>{% if r.amount_lost_usd %}${{ '{:,}'.format(r.amount_lost_usd) }}{% else %}—{% endif %}</td>
+      <td>{{ r.company_name }}</td>
+      <td><span class="badge {{ 'verified' if r.verified else 'unverified' }}">
+        {{ 'verified' if r.verified else 'unconfirmed' }}</span></td>
+      <td style="max-width:26rem;" class="muted">{{ r.notes or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<h2>Recent checks across the network</h2>
+<div class="card">
+  <table>
+    <tr>
+      <th>When</th><th>Broker</th><th>MC</th><th>Contact used</th>
+      <th>Load value</th><th>Score</th><th>Verdict</th><th></th>
+    </tr>
+    {% for c in checks %}
+    <tr>
+      <td class="muted">{{ c.created_at[:16] }}</td>
+      <td>{{ c.company_name }}</td>
+      <td class="mono">{{ c.mc_number }}</td>
+      <td class="mono muted">{{ c.contact_email or '—' }}</td>
+      <td>{% if c.load_value_usd %}${{ '{:,}'.format(c.load_value_usd) }}{% else %}—{% endif %}</td>
+      <td><strong>{{ c.risk_score }}</strong></td>
+      <td><span class="badge {{ c.verdict }}">{{ c.verdict }}</span></td>
+      <td><a class="btn btn-ghost btn-sm" href="{{ url_for('check_detail', check_id=c.id) }}">View</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<p class="muted" style="line-height:1.6; max-width:70ch;">
+  Look at the checks against <span class="mono">MC-775410</span>. Four brokers, four
+  different dispatch emails, nineteen days. Not one of those brokers could have seen the
+  pattern alone — and the government record on that carrier is spotless.
+</p>
+{% endblock %}

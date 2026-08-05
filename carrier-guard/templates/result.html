@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Check #{{ check_id }} — {{ verdict|upper }}{% endblock %}
+
+{% block content %}
+
+<div class="verdict {{ verdict }}">
+  <div class="score">{{ score }}<small>RISK / 100</small></div>
+  <div style="flex:1; min-width:16rem;">
+    <div class="word">{{ verdict|upper }}</div>
+    <div class="headline" style="margin-top:0.5rem;">{{ action[0] }}</div>
+    <div class="detail">{{ action[1] }}</div>
+  </div>
+</div>
+
+<p class="muted" style="margin:-0.5rem 0 1.3rem;">
+  Check #{{ check_id }} &middot; {{ mc_number }}
+  {% if submitted.contact_name %} &middot; spoke to {{ submitted.contact_name }}{% endif %}
+  {% if historical %} &middot; run {{ historical[:16] }}{% endif %}
+  {% if carrier %} &middot; carrier of record: <strong>{{ carrier.legal_name }}</strong>{% endif %}
+</p>
+
+<div class="grid grid-2" style="align-items:start;">
+
+  <div>
+    <h2 style="margin-top:0;">Why — every point, itemized</h2>
+    {% if signals %}
+      {% for s in signals %}
+      <div class="sig {{ s.severity }}">
+        <div class="pts">{{ '%+d'|format(s.weight) }}</div>
+        <div>
+          <div class="lbl">{{ s.label }}</div>
+          <div class="det">{{ s.detail }}</div>
+          <div class="src">{{ s.source }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="card">
+        <strong>No risk signals fired.</strong>
+        <p class="muted" style="margin-top:0.4rem;">
+          Authority, insurance, safety, contact identity, and network history all agree.
+        </p>
+      </div>
+    {% endif %}
+
+    <p class="muted" style="margin-top:0.9rem; line-height:1.5;">
+      A verdict you can't defend to your boss is worthless, so every point is traced to
+      its source. Mitigating history subtracts — but a single critical finding is never
+      argued away by a good track record.
+    </p>
+  </div>
+
+  <div>
+    <h2 style="margin-top:0;">What the record says</h2>
+    {% if carrier %}
+    <div class="card">
+      <div style="font-weight:800; font-size:1.05rem;">{{ carrier.legal_name }}</div>
+      <div class="mono muted" style="margin-bottom:0.9rem;">
+        {{ carrier.mc_number }} &middot; DOT {{ carrier.dot_number }}
+      </div>
+      <table>
+        <tr><th>Authority</th>
+            <td>{{ carrier.authority_status|upper }} since {{ carrier.authority_granted }}
+                {% if carrier.reinstatement_count %}
+                  <span class="muted">({{ carrier.reinstatement_count }} reinstatements)</span>
+                {% endif %}</td></tr>
+        <tr><th>Cargo ins.</th>
+            <td>expires {{ carrier.cargo_expires }} &middot;
+                ${{ '{:,}'.format(carrier.cargo_coverage_usd) }} coverage</td></tr>
+        <tr><th>Liability</th><td>expires {{ carrier.liability_expires }}</td></tr>
+        <tr><th>Fleet</th>
+            <td>{{ carrier.power_units }} power units &middot;
+                {{ '%.0f'|format(carrier.oos_rate * 100) }}% out-of-service rate</td></tr>
+        <tr><th>Last insp.</th><td>{{ carrier.last_inspection or 'never' }}</td></tr>
+        <tr><th>Address</th>
+            <td>{{ carrier.registered_address }}
+                <span class="muted">({{ carrier.address_type }})</span></td></tr>
+      </table>
+
+      <h2 style="font-size:0.95rem;">Contact of record vs. what you were given</h2>
+      <table>
+        <tr><th></th><th>On file</th><th>You were given</th></tr>
+        <tr>
+          <th>Email</th>
+          <td class="mono">{{ carrier.registered_email }}</td>
+          <td class="mono" {% if submitted.contact_email and
+                               submitted.contact_email != carrier.registered_email %}
+                  style="color:var(--red); font-weight:700;"{% endif %}>
+            {{ submitted.contact_email or '—' }}
+          </td>
+        </tr>
+        <tr>
+          <th>Phone</th>
+          <td class="mono">{{ carrier.registered_phone | fmt_phone }}</td>
+          <td class="mono" {% if submitted.contact_phone and
+                               submitted.contact_phone != carrier.registered_phone %}
+                  style="color:var(--red); font-weight:700;"{% endif %}>
+            {{ submitted.contact_phone | fmt_phone }}
+          </td>
+        </tr>
+      </table>
+      <p class="muted" style="margin-top:0.8rem;">
+        When these disagree, call the number on file. Never the one you were given.
+      </p>
+    </div>
+    {% else %}
+    <div class="card">
+      <strong>No carrier record found for {{ mc_number }}.</strong>
+      <p class="muted" style="margin-top:0.4rem;">
+        This MC number is not in the FMCSA registry snapshot. Confirm the number before
+        going any further — and treat pressure to skip this step as the tell that it is.
+      </p>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h2 style="margin-top:0; font-size:1rem;">Next</h2>
+      <form method="post" action="{{ url_for('check') }}" style="display:inline;">
+        <input type="hidden" name="mc_number"     value="{{ mc_number }}">
+        <input type="hidden" name="contact_email" value="{{ submitted.contact_email or '' }}">
+        <input type="hidden" name="contact_phone" value="{{ submitted.contact_phone or '' }}">
+        <input type="hidden" name="contact_name"  value="{{ submitted.contact_name or '' }}">
+        <input type="hidden" name="load_value"    value="{{ submitted.load_value or '' }}">
+        <button class="btn btn-ghost btn-sm" type="submit">Re-run this check</button>
+      </form>
+      <a class="btn btn-red btn-sm"
+         href="{{ url_for('report', mc_number=mc_number,
+                          reported_email=submitted.contact_email or '',
+                          reported_phone=submitted.contact_phone or '') }}">
+        Report fraud on this MC
+      </a>
+      <p class="muted" style="margin-top:0.8rem; line-height:1.5;">
+        Filing a report raises this carrier's score for every broker on the network
+        immediately. Re-run the check afterwards and watch the verdict move.
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}
