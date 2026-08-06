@@ -130,6 +130,8 @@ The signals, by source:
 | `config.py` | Environment-driven config. Fails fast in production on missing secrets. |
 | `auth.py` | Passwords, sessions, API keys, tenancy, plan metering. |
 | `api.py` | The JSON API. |
+| `ingest.py` | Carrier data sources, on-demand lookup, and the nightly refresh. |
+| `test_ingest.py` | Ingest regression tests against faked sources. |
 | `queries.py` | Read queries shared across routes. |
 | `app.py` | Flask routes, input validation, error handling. |
 | `seed.py` | Development data — and the verdict regression test. |
@@ -157,6 +159,56 @@ someone else leaks the very thing being protected.
 useless if it leaks. The plaintext key is shown once, carried to that page in the session
 rather than a query string — a key in a URL ends up in browser history, proxy logs, and
 the `Referer` header of the next request.
+
+## Carrier data
+
+```bash
+python3 ingest.py --stale          # nightly refresh (what the cron job runs)
+python3 ingest.py --mc MC-471902   # one carrier
+python3 ingest.py --stale --dry-run
+python3 test_ingest.py             # regression tests, no network or key needed
+```
+
+Everything goes through a source adapter. `FmcsaQcMobileSource` talks to the real API;
+`UnavailableSource` is what you get with no `FMCSA_WEBKEY`. The field mapping lives in one
+function (`_normalize`) because **that mapping is the part most likely to be wrong until
+it has run against a live payload** — every lookup is guarded, so a renamed upstream field
+produces a missing value rather than a crashed job. Eyeball a known carrier's output the
+first time it runs for real.
+
+Checks resolve carriers on demand: a cached record newer than 24h is used as-is, anything
+older or absent triggers a live fetch. The nightly job refreshes only carriers someone has
+actually checked in the last 90 days — refreshing the whole FMCSA census would be enormous
+and pointless.
+
+### "Not found" and "could not check" are different answers
+
+This is the most important correctness decision in the ingest, and it is easy to get
+wrong. In the seeded prototype, an MC number missing from the table meant the authority
+didn't exist — a 55-point critical finding, an instant `BLOCK`. Against real data that
+inference is invalid: a legitimate carrier can be missing simply because nobody has looked
+it up yet, or because FMCSA is down.
+
+Reporting *our* outage as a fraud signal would block real carriers and destroy trust in
+the product on day one. So:
+
+| Situation | Signal | Weight | Verdict floor |
+|---|---|---|---|
+| Source reached, no such authority | `AUTHORITY_NOT_FOUND` | 55, critical | `BLOCK` |
+| Source unreachable, nothing cached | `AUTHORITY_UNVERIFIED` | 30, high | `REVIEW` |
+| Source unreachable, stale copy cached | `RECORD_STALE` | **0**, low | unchanged |
+
+An outage produces "verify this by hand", never an accusation. A stale fallback is used
+and its age is disclosed on the verdict page at zero weight, because how old our copy is
+says nothing about the carrier.
+
+### Failed ingest must look failed
+
+A run with no usable source is recorded as `failed`, not as a clean no-op, and the CLI
+exits non-zero so the cron job alerts. Left as `ok` it would be indistinguishable in
+monitoring from a successful refresh while the carriers table quietly rotted — and a stale
+`CLEAR` looks exactly like a fresh `CLEAR` to the broker trusting it. `/healthz` reports
+stale-record counts for the same reason.
 
 ## Accounts and the API
 
@@ -221,7 +273,7 @@ Config reference: `.env.example`.
 
 | Prototype | Production |
 |---|---|
-| Seeded `carriers` table | Nightly FMCSA SAFER + Company Snapshot ingest |
+| Seeded `carriers` table | **Done** — `ingest.py`, pending an `FMCSA_WEBKEY` |
 | Seeded `phone_intel` table | Twilio Lookup — line type and provisioning age |
 | `address_type` column | USPS CMRA database + address verification |
 | Insurance columns | FMCSA L&I insurance filings, plus certificate parsing |

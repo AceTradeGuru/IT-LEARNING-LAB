@@ -35,6 +35,30 @@ services:
       - key: TWILIO_AUTH_TOKEN
         sync: false
 
+  # Nightly carrier refresh. Exits non-zero when it cannot reach FMCSA or has
+  # no key configured, so a silently dead ingest shows up as a failed job
+  # instead of a table of quietly rotting authority data.
+  - type: cron
+    name: carrierguard-ingest
+    runtime: docker
+    dockerfilePath: ./carrier-guard/Dockerfile
+    dockerContext: ./carrier-guard
+    schedule: "0 8 * * *"          # 08:00 UTC — early morning US
+    dockerCommand: python ingest.py --stale
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true        # unused by the job; config demands it in prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: carrierguard-db
+          property: connectionString
+      - key: DB_POOL_MAX
+        value: "2"
+      - key: FMCSA_WEBKEY
+        sync: false
+
 databases:
   - name: carrierguard-db
     plan: basic-256mb

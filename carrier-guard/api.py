@@ -13,6 +13,7 @@ import logging
 from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, consume_check, quota_state
+from ingest import resolve_carrier
 from risk_engine import normalize_phone, run_check
 
 log = logging.getLogger("carrierguard.api")
@@ -102,7 +103,7 @@ def create_check():
         conn, org["id"], mc_number,
         _text(payload.get("contact_email")).lower(),
         normalize_phone(payload.get("contact_phone")),
-        _text(payload.get("contact_name")), load_value)
+        _text(payload.get("contact_name")), load_value, resolver=resolve_carrier)
     consume_check(conn, org["id"])
 
     log.info("api check id=%s org=%s mc=%s verdict=%s",

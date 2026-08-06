@@ -48,6 +48,7 @@ HIGH_OOS_RATE = 0.20          # roughly 1.5x the national vehicle OOS average
 CONTACT_CHURN_WINDOW = 30     # days
 CONTACT_CHURN_EMAILS = 3      # distinct emails inside the window
 CONTACT_CHURN_BROKERS = 2     # ...seen by at least this many brokers
+STALE_RECORD_DAYS = 3         # past this, say so on the verdict page
 
 
 # ---------------------------------------------------------------- helpers
@@ -366,31 +367,62 @@ def _fmt_phone(digits):
 # ---------------------------------------------------------------- public API
 
 def evaluate(conn, org_id, mc_number, contact_email="", contact_phone="",
-             load_value=None):
+             load_value=None, carrier=None, carrier_status=None):
     """
     Score one carrier against one inbound contact. Returns a dict:
-        carrier, signals (list[Signal]), score (0-100), verdict, band
+        carrier, signals (list[Signal]), score (0-100), verdict
+
+    `carrier_status` is 'found', 'not_found', or 'unavailable' — see below for
+    why the last two must not be collapsed. When omitted, the carrier is read
+    straight from the local table and absence is taken to mean not_found.
+
     Does not write anything — call run_check() to score and persist.
     """
     mc_number = (mc_number or "").strip().upper()
     contact_email = (contact_email or "").strip().lower()
     phone_digits = normalize_phone(contact_phone)
 
-    carrier = conn.execute(
-        "SELECT * FROM carriers WHERE mc_number = %s", (mc_number,)).fetchone()
+    if carrier_status is None:
+        carrier = conn.execute(
+            "SELECT * FROM carriers WHERE mc_number = %s", (mc_number,)).fetchone()
+        carrier_status = "found" if carrier is not None else "not_found"
 
     signals = []
 
-    if carrier is None:
-        # No matching authority at all. Either a typo or an invented MC number,
-        # and both mean: do not tender this load.
+    if carrier is None and carrier_status == "unavailable":
+        # We could not reach FMCSA. That is a fact about US, not about the
+        # carrier, and it must never be scored as though it were evidence of
+        # fraud — doing so would BLOCK legitimate carriers during our own
+        # outages. Weighted to force a REVIEW (verify by hand) and no further.
+        signals.append(Signal(
+            "AUTHORITY_UNVERIFIED",
+            "Could not verify this authority right now",
+            f"The FMCSA lookup for {mc_number} is unavailable, so nothing here has been "
+            f"confirmed against the government record. This is a gap on our side, not a "
+            f"finding against the carrier — verify by hand before tendering.",
+            30, "high", "fmcsa"))
+    elif carrier is None:
+        # We asked and there is no such authority. Either a typo or an invented
+        # MC number, and both mean: do not tender this load.
         signals.append(Signal(
             "AUTHORITY_NOT_FOUND",
             "No operating authority found for this MC number",
-            f"{mc_number} does not appear in the FMCSA registry snapshot. Confirm the "
-            f"number, and treat any pressure to skip this step as the tell it is.",
+            f"{mc_number} does not appear in the FMCSA registry. Confirm the number, and "
+            f"treat any pressure to skip this step as the tell it is.",
             55, "critical", "fmcsa"))
     else:
+        age = _days_since(carrier["fetched_at"])
+        if age is not None and age > STALE_RECORD_DAYS:
+            # Zero weight on purpose: the age of our copy says nothing about the
+            # carrier. It is shown so a broker can see what the verdict rests on.
+            signals.append(Signal(
+                "RECORD_STALE",
+                f"This government record is {age} days old",
+                f"Last refreshed from FMCSA {_as_date(carrier['fetched_at'])}. Authority "
+                f"or insurance could have changed since. Scored anyway; weighted zero "
+                f"because staleness is our problem, not the carrier's.",
+                0, "low", "fmcsa"))
+
         phone_type = "unknown"
         if phone_digits:
             row = conn.execute(
@@ -422,12 +454,17 @@ def evaluate(conn, org_id, mc_number, contact_email="", contact_phone="",
 
 
 def run_check(conn, org_id, mc_number, contact_email="", contact_phone="",
-              contact_name="", load_value=None, at=None):
+              contact_name="", load_value=None, at=None, resolver=None):
     """
     Score a carrier, persist the check and its signals, and update the
     network's contact memory. Returns (check_id, result).
 
     `at` backdates the record (used to seed a believable history).
+
+    `resolver(conn, mc_number) -> (carrier, status)` optionally refreshes the
+    carrier from FMCSA on demand — see ingest.resolve_carrier. Without one, the
+    local table is the whole universe, which is correct for seeded development
+    and wrong in production.
 
     Does not commit — the caller's `db.connection()` block owns the transaction,
     so a failure partway through leaves no check row with missing signals behind.
@@ -437,7 +474,9 @@ def run_check(conn, org_id, mc_number, contact_email="", contact_phone="",
     phone_digits = normalize_phone(contact_phone)
     stamp = at or datetime.now(UTC)
 
-    result = evaluate(conn, org_id, mc_number, contact_email, phone_digits, load_value)
+    carrier, status = (resolver(conn, mc_number) if resolver else (None, None))
+    result = evaluate(conn, org_id, mc_number, contact_email, phone_digits,
+                      load_value, carrier=carrier, carrier_status=status)
 
     cur = conn.cursor()
     cur.execute(

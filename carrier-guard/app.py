@@ -19,6 +19,7 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
 
 import db
 from api import api as api_blueprint
+from ingest import resolve_carrier
 from auth import (consume_check, create_organization, email_problem,
                   generate_api_key, load_current, login_required, login_user,
                   logout_user, password_problem, quota_state, verify_password)
@@ -364,7 +365,7 @@ def check():
         check_id, result = run_check(
             conn, g.org["id"], mc_number,
             clean_text(f.get("contact_email")), clean_text(f.get("contact_phone")),
-            clean_text(f.get("contact_name")), load_value)
+            clean_text(f.get("contact_name")), load_value, resolver=resolve_carrier)
         consume_check(conn, g.org["id"])
 
     log.info("check id=%s org=%s mc=%s verdict=%s score=%s",
