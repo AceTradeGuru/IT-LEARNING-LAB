@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Start free{% endblock %}
+
+{% block content %}
+<div style="max-width:34rem; margin:0 auto;">
+  <h1>Start checking carriers</h1>
+  <p class="sub">
+    Starter plan, 250 checks a month. No card required.
+  </p>
+
+  <div class="card">
+    <form method="post" action="{{ url_for('signup') }}">
+      <label for="company_name">Brokerage or company name</label>
+      <input id="company_name" name="company_name" required maxlength="200"
+             value="{{ form.get('company_name', '') }}">
+
+      <label for="full_name">Your name</label>
+      <input id="full_name" name="full_name" maxlength="200"
+             value="{{ form.get('full_name', '') }}">
+
+      <label for="email">Work email</label>
+      <input id="email" name="email" type="email" required maxlength="200"
+             autocomplete="email" value="{{ form.get('email', '') }}">
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required
+             minlength="12" autocomplete="new-password">
+      <p class="muted" style="margin-top:0.35rem;">At least 12 characters.</p>
+
+      <div style="margin-top:1.2rem;">
+        <button class="btn btn-primary" type="submit">Create account</button>
+      </div>
+    </form>
+  </div>
+
+  <p class="muted" style="text-align:center;">
+    Already have an account? <a href="{{ url_for('login') }}">Sign in</a>.
+  </p>
+</div>
+{% endblock %}

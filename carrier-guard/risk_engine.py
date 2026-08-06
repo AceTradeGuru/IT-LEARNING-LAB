@@ -284,7 +284,7 @@ def _identity_signals(carrier, contact_email, contact_phone, phone_type):
     return out
 
 
-def _network_signals(conn, mc_number, contact_email, contact_phone, broker_id):
+def _network_signals(conn, mc_number, contact_email, contact_phone):
     """
     What the rest of the network already knows. None of this is purchasable —
     it exists only because other brokers ran their checks here first.
@@ -321,7 +321,7 @@ def _network_signals(conn, mc_number, contact_email, contact_phone, broker_id):
     # The window is a bound parameter, not string-interpolated SQL.
     churn = conn.execute(
         """SELECT COUNT(DISTINCT contact_email) AS emails,
-                  COUNT(DISTINCT broker_id)     AS brokers
+                  COUNT(DISTINCT org_id)     AS brokers
            FROM contact_observations
            WHERE mc_number = %s
              AND contact_email <> ''
@@ -340,7 +340,7 @@ def _network_signals(conn, mc_number, contact_email, contact_phone, broker_id):
 
     # Standing history for this exact contact, excluding the check in progress.
     seen = conn.execute(
-        """SELECT SUM(times_seen) AS hits, COUNT(DISTINCT broker_id) AS brokers,
+        """SELECT SUM(times_seen) AS hits, COUNT(DISTINCT org_id) AS brokers,
                   MIN(first_seen) AS since
            FROM contact_observations
            WHERE mc_number = %s AND contact_email = %s""",
@@ -365,7 +365,7 @@ def _fmt_phone(digits):
 
 # ---------------------------------------------------------------- public API
 
-def evaluate(conn, broker_id, mc_number, contact_email="", contact_phone="",
+def evaluate(conn, org_id, mc_number, contact_email="", contact_phone="",
              load_value=None):
     """
     Score one carrier against one inbound contact. Returns a dict:
@@ -404,7 +404,7 @@ def evaluate(conn, broker_id, mc_number, contact_email="", contact_phone="",
         signals += _safety_signals(carrier)
         signals += _identity_signals(carrier, contact_email, phone_digits, phone_type)
 
-    signals += _network_signals(conn, mc_number, contact_email, phone_digits, broker_id)
+    signals += _network_signals(conn, mc_number, contact_email, phone_digits)
 
     # Mitigating evidence can pull a score down, but never below zero, and a
     # single critical finding is never argued away by good history.
@@ -421,7 +421,7 @@ def evaluate(conn, broker_id, mc_number, contact_email="", contact_phone="",
     return {"carrier": carrier, "signals": signals, "score": score, "verdict": verdict}
 
 
-def run_check(conn, broker_id, mc_number, contact_email="", contact_phone="",
+def run_check(conn, org_id, mc_number, contact_email="", contact_phone="",
               contact_name="", load_value=None, at=None):
     """
     Score a carrier, persist the check and its signals, and update the
@@ -437,15 +437,15 @@ def run_check(conn, broker_id, mc_number, contact_email="", contact_phone="",
     phone_digits = normalize_phone(contact_phone)
     stamp = at or datetime.now(UTC)
 
-    result = evaluate(conn, broker_id, mc_number, contact_email, phone_digits, load_value)
+    result = evaluate(conn, org_id, mc_number, contact_email, phone_digits, load_value)
 
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO checks (broker_id, mc_number, contact_name, contact_email,
+        """INSERT INTO checks (org_id, mc_number, contact_name, contact_email,
                                contact_phone, load_value_usd, risk_score, verdict, created_at)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
-        (broker_id, mc_number, contact_name.strip() or None, contact_email or None,
+        (org_id, mc_number, contact_name.strip() or None, contact_email or None,
          phone_digits or None, load_value, result["score"], result["verdict"], stamp))
     check_id = cur.fetchone()["id"]
 
@@ -461,11 +461,11 @@ def run_check(conn, broker_id, mc_number, contact_email="", contact_phone="",
     if contact_email or phone_digits:
         cur.execute(
             """INSERT INTO contact_observations
-                   (mc_number, contact_email, contact_phone, broker_id, first_seen, last_seen)
+                   (mc_number, contact_email, contact_phone, org_id, first_seen, last_seen)
                VALUES (%s, %s, %s, %s, %s, %s)
-               ON CONFLICT (mc_number, contact_email, contact_phone, broker_id)
+               ON CONFLICT (mc_number, contact_email, contact_phone, org_id)
                DO UPDATE SET times_seen = contact_observations.times_seen + 1,
                              last_seen  = EXCLUDED.last_seen""",
-            (mc_number, contact_email, phone_digits, broker_id, stamp, stamp))
+            (mc_number, contact_email, phone_digits, org_id, stamp, stamp))
 
     return check_id, result

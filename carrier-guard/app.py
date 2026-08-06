@@ -12,15 +12,19 @@ Production is served by gunicorn against the `app` object; see Dockerfile.
 """
 
 import logging
+from datetime import timedelta
 
-from flask import (Flask, abort, flash, redirect, render_template, request,
+from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    session, url_for)
 
 import db
+from api import api as api_blueprint
+from auth import (consume_check, create_organization, email_problem,
+                  generate_api_key, load_current, login_required, login_user,
+                  logout_user, password_problem, quota_state, verify_password)
 from config import load
 from queries import carrier_staleness, network_stats
 from risk_engine import evaluate, normalize_phone, run_check
-from seed import DEMO_BROKER_ID
 
 cfg = load()
 
@@ -31,7 +35,9 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=cfg.SESSION_COOKIE_HTTPONLY,
     SESSION_COOKIE_SAMESITE=cfg.SESSION_COOKIE_SAMESITE,
     MAX_CONTENT_LENGTH=cfg.MAX_CONTENT_LENGTH,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=14),
 )
+app.register_blueprint(api_blueprint)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,8 +136,10 @@ def parse_money(raw):
     return value if 0 <= value <= MAX_LOAD_VALUE else None
 
 
-def current_broker_id():
-    return session.get("broker_id", DEMO_BROKER_ID)
+def safe_next(raw, fallback_endpoint="index"):
+    """Only ever redirect to a path on this app, never a caller-supplied host."""
+    return (raw if raw.startswith("/") and not raw.startswith("//")
+            else url_for(fallback_endpoint))
 
 
 def as_dicts(signals):
@@ -163,15 +171,22 @@ def fmt_phone(raw):
     return digits or "—"
 
 
-@app.context_processor
-def inject_broker():
-    """Every page shows which subscriber you're acting as."""
+@app.before_request
+def attach_identity():
+    """Resolve the signed-in user once per request. API routes authenticate separately."""
+    g.user = None
+    g.org = None
+    if request.blueprint == "api" or not session.get("user_id"):
+        return
     with db.connection() as conn:
-        brokers = conn.execute(
-            "SELECT * FROM brokers ORDER BY company_name").fetchall()
-        me = conn.execute(
-            "SELECT * FROM brokers WHERE id = %s", (current_broker_id(),)).fetchone()
-    return {"all_brokers": brokers, "me": me}
+        load_current(conn)
+
+
+@app.context_processor
+def inject_identity():
+    quota = quota_state(g.org) if g.org else (0, None, False)
+    return {"current_user": g.user, "current_org": g.org,
+            "quota_used": quota[0], "quota_limit": quota[1]}
 
 
 # ---------- operational ----------
@@ -198,24 +213,119 @@ def healthz():
     }
 
 
-@app.route("/act-as", methods=["POST"])
-def act_as():
-    try:
-        broker_id = int(request.form["broker_id"])
-    except (KeyError, ValueError):
-        abort(400)
+# ---------- accounts ----------
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if session.get("user_id"):
+        return redirect(url_for("check"))
+    if request.method == "GET":
+        return render_template("signup.html", form={})
+
+    f = request.form
+    company = clean_text(f.get("company_name"))
+    email = clean_text(f.get("email")).lower()
+    password = f.get("password") or ""
+
+    problem = (("Enter your company name." if not company else None)
+               or email_problem(email) or password_problem(password))
+    if problem:
+        flash(problem)
+        return render_template("signup.html", form=f), 400
 
     with db.connection() as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM brokers WHERE id = %s", (broker_id,)).fetchone()
-    if not exists:
-        abort(400)
+        user, error = create_organization(
+            conn, company, email, password, clean_text(f.get("full_name")))
+        if error:
+            flash(error)
+            return render_template("signup.html", form=f), 400
+        login_user(conn, user)
 
-    session["broker_id"] = broker_id
-    # Only ever redirect to a path on this app — never to a caller-supplied URL.
-    nxt = request.form.get("next", "")
-    return redirect(nxt if nxt.startswith("/") and not nxt.startswith("//")
-                    else url_for("index"))
+    log.info("signup org=%s user=%s", user["org_id"], user["id"])
+    flash("Account created. You're on the Starter plan — 250 checks a month.")
+    return redirect(url_for("check"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("user_id"):
+        return redirect(url_for("check"))
+    if request.method == "GET":
+        return render_template("login.html", next=request.args.get("next", ""))
+
+    f = request.form
+    email = clean_text(f.get("email")).lower()
+
+    with db.connection() as conn:
+        user = conn.execute(
+            "SELECT * FROM users WHERE lower(email) = %s", (email,)).fetchone()
+        # One message for both cases: distinguishing them turns the login form
+        # into an oracle for which email addresses have accounts here.
+        if user is None or not verify_password(user["password_hash"], f.get("password") or ""):
+            flash("Email or password is incorrect.")
+            return render_template("login.html", next=f.get("next", "")), 401
+        login_user(conn, user)
+
+    return redirect(safe_next(f.get("next", ""), "check"))
+
+
+@app.post("/logout")
+def logout():
+    logout_user()
+    flash("Signed out.")
+    return redirect(url_for("index"))
+
+
+@app.route("/settings")
+@login_required
+def settings():
+    with db.connection() as conn:
+        keys = conn.execute(
+            """SELECT k.*, u.email AS created_by_email
+               FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+               WHERE k.org_id = %s ORDER BY k.revoked_at NULLS FIRST, k.created_at DESC""",
+            (g.org["id"],)).fetchall()
+        members = conn.execute(
+            "SELECT * FROM users WHERE org_id = %s ORDER BY created_at",
+            (g.org["id"],)).fetchall()
+
+    # Shown exactly once, immediately after creation, then dropped.
+    new_key = session.pop("new_api_key", None)
+    return render_template("settings.html", keys=keys, members=members, new_key=new_key)
+
+
+@app.post("/settings/api-keys")
+@login_required
+def create_api_key():
+    name = clean_text(request.form.get("name"), 80) or "Untitled key"
+    full, prefix, key_hash = generate_api_key()
+
+    with db.connection() as conn:
+        conn.execute(
+            """INSERT INTO api_keys (org_id, name, key_prefix, key_hash, created_by)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (g.org["id"], name, prefix, key_hash, g.user["user_id"]))
+
+    # Carried in the session, not the URL: a key in a query string ends up in
+    # browser history, proxy logs, and the Referer header of the next request.
+    session["new_api_key"] = full
+    log.info("api_key created org=%s prefix=%s", g.org["id"], prefix)
+    flash("API key created. Copy it now — it will not be shown again.")
+    return redirect(url_for("settings"))
+
+
+@app.post("/settings/api-keys/<int:key_id>/revoke")
+@login_required
+def revoke_api_key(key_id):
+    with db.connection() as conn:
+        updated = conn.execute(
+            """UPDATE api_keys SET revoked_at = now()
+               WHERE id = %s AND org_id = %s AND revoked_at IS NULL
+               RETURNING id""", (key_id, g.org["id"])).fetchone()
+    if updated:
+        log.info("api_key revoked org=%s key=%s", g.org["id"], key_id)
+        flash("API key revoked. Any integration using it will start failing immediately.")
+    return redirect(url_for("settings"))
 
 
 # ---------- Landing ----------
@@ -230,6 +340,7 @@ def index():
 # ---------- The check ----------
 
 @app.route("/check", methods=["GET", "POST"])
+@login_required
 def check():
     if request.method == "GET":
         # Prefilled from a scenario link, or blank.
@@ -241,17 +352,23 @@ def check():
         flash("Enter an MC number to run a check.")
         return redirect(url_for("check"))
 
+    used, limit, exceeded = quota_state(g.org)
+    if exceeded:
+        flash(f"You've used all {limit} checks on the {g.org['plan'].title()} plan "
+              f"this period. Upgrade to keep checking.")
+        return redirect(url_for("settings"))
+
     load_value = parse_money(f.get("load_value"))
 
     with db.connection() as conn:
         check_id, result = run_check(
-            conn, current_broker_id(), mc_number,
+            conn, g.org["id"], mc_number,
             clean_text(f.get("contact_email")), clean_text(f.get("contact_phone")),
             clean_text(f.get("contact_name")), load_value)
+        consume_check(conn, g.org["id"])
 
-    log.info("check id=%s broker=%s mc=%s verdict=%s score=%s",
-             check_id, current_broker_id(), mc_number,
-             result["verdict"], result["score"])
+    log.info("check id=%s org=%s mc=%s verdict=%s score=%s",
+             check_id, g.org["id"], mc_number, result["verdict"], result["score"])
 
     return render_template(
         "result.html", check_id=check_id, carrier=result["carrier"],
@@ -264,10 +381,14 @@ def check():
 
 
 @app.route("/check/<int:check_id>")
+@login_required
 def check_detail(check_id):
     with db.connection() as conn:
+        # Scoped by org: a check history is a list of exactly which carriers a
+        # brokerage is about to do business with. Subscribers are competitors.
         row = conn.execute(
-            "SELECT * FROM checks WHERE id = %s", (check_id,)).fetchone()
+            "SELECT * FROM checks WHERE id = %s AND org_id = %s",
+            (check_id, g.org["id"])).fetchone()
         if row is None:
             abort(404)
 
@@ -290,6 +411,7 @@ def check_detail(check_id):
 # ---------- Registry: what the government record alone would tell you ----------
 
 @app.route("/registry")
+@login_required
 def registry():
     rows = []
     with db.connection() as conn:
@@ -298,7 +420,7 @@ def registry():
         for c in carriers:
             # Score each carrier against its OWN contact of record, so the table
             # shows the honest baseline before anyone impersonates anybody.
-            r = evaluate(conn, current_broker_id(), c["mc_number"],
+            r = evaluate(conn, g.org["id"], c["mc_number"],
                          c["registered_email"], c["registered_phone"], load_value=75000)
             rows.append({"carrier": c, "verdict": r["verdict"], "score": r["score"],
                          "top": r["signals"][0].label if r["signals"] else "No findings"})
@@ -312,6 +434,7 @@ VALID_INCIDENTS = {"double_brokered", "identity_theft", "payment_redirect",
 
 
 @app.route("/report", methods=["GET", "POST"])
+@login_required
 def report():
     if request.method == "GET":
         return render_template("report.html", form=request.args)
@@ -328,15 +451,14 @@ def report():
 
     with db.connection() as conn:
         conn.execute(
-            """INSERT INTO fraud_reports (broker_id, mc_number, reported_email,
+            """INSERT INTO fraud_reports (org_id, mc_number, reported_email,
                  reported_phone, incident_type, amount_lost_usd, notes)
                VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-            (current_broker_id(), mc_number, reported_email or None,
+            (g.org["id"], mc_number, reported_email or None,
              reported_phone or None, incident, parse_money(f.get("amount_lost")) or 0,
              clean_text(f.get("notes"), MAX_NOTES) or None))
 
-    log.info("fraud_report broker=%s mc=%s type=%s",
-             current_broker_id(), mc_number, incident)
+    log.info("fraud_report org=%s mc=%s type=%s", g.org["id"], mc_number, incident)
 
     flash(f"Report filed against {mc_number}. Every broker on the network is "
           f"protected from it as of this second — re-run the check to see it.")
@@ -348,18 +470,23 @@ def report():
 # ---------- The network ----------
 
 @app.route("/network")
+@login_required
 def network():
     with db.connection() as conn:
         stats = network_stats(conn)
+        # Your own check history only. The aggregate counts above are network-wide
+        # (that is the point of the network), but the per-check feed is not:
+        # publishing which carriers a brokerage is vetting would tell competitors
+        # exactly which lanes and customers they are working.
         checks = conn.execute(
-            """SELECT c.*, b.company_name FROM checks c
-               JOIN brokers b ON b.id = c.broker_id
-               ORDER BY c.created_at DESC LIMIT 25""").fetchall()
+            """SELECT * FROM checks WHERE org_id = %s
+               ORDER BY created_at DESC LIMIT 25""", (g.org["id"],)).fetchall()
+        # Fraud reports ARE shared — a warning nobody can see protects nobody.
         reports = conn.execute(
-            """SELECT r.*, b.company_name, ca.legal_name FROM fraud_reports r
-               JOIN brokers b ON b.id = r.broker_id
+            """SELECT r.*, o.name AS company_name, ca.legal_name FROM fraud_reports r
+               JOIN organizations o ON o.id = r.org_id
                LEFT JOIN carriers ca ON ca.mc_number = r.mc_number
-               ORDER BY r.created_at DESC""").fetchall()
+               ORDER BY r.created_at DESC LIMIT 50""").fetchall()
     return render_template("network.html", stats=stats, checks=checks, reports=reports)
 
 

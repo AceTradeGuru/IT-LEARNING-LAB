@@ -25,10 +25,17 @@ import sys
 from datetime import UTC, date, datetime, timedelta
 
 import db
+from auth import hash_password, slugify
 from risk_engine import evaluate, run_check
 
-# The demo broker: whoever is running the pitch.
-DEMO_BROKER_ID = 1
+# The demo organization: whoever is running the pitch.
+DEMO_ORG_ID = 1
+
+# Development credentials. Every seeded org gets a login with this password so
+# the demo can be walked from a clean database. Seeding is refused against a
+# production database (see main()), which is what keeps this from being a
+# default credential in a live system.
+DEMO_PASSWORD = "carrierguard-demo"
 
 
 # Seed dates are always relative to today so the demo never goes stale.
@@ -40,11 +47,12 @@ def stamp(days_ago):
     return datetime.now(UTC) - timedelta(days=days_ago)
 
 
-BROKERS = [
-    ("Peach State Logistics",      "MC-111222", "ops@peachstate.example",        "pro"),
-    ("BlueLine Freight",           "MC-333444", "dispatch@blueline.example",     "starter"),
-    ("Continental Shippers Group", "MC-555666", "traffic@continentalsg.example", "enterprise"),
-    ("Gulf Coast Brokerage",       "MC-777888", "desk@gulfcoast.example",        "pro"),
+ORGS = [
+    # (name, mc_number, billing/login email, plan, contact person)
+    ("Peach State Logistics",      "MC-111222", "ops@peachstate.example",        "pro",        "Anthony R."),
+    ("BlueLine Freight",           "MC-333444", "dispatch@blueline.example",     "starter",    "Dana Kirby"),
+    ("Continental Shippers Group", "MC-555666", "traffic@continentalsg.example", "enterprise", "Rob Sandoval"),
+    ("Gulf Coast Brokerage",       "MC-777888", "desk@gulfcoast.example",        "pro",        "Marie Hebert"),
 ]
 
 
@@ -164,9 +172,17 @@ def seed(conn, verbose=True):
 
     cur = conn.cursor()
 
-    cur.executemany(
-        "INSERT INTO brokers (company_name, mc_number, contact_email, plan) "
-        "VALUES (%s, %s, %s, %s)", BROKERS)
+    # One org and one owner user each. The password hash is computed per row
+    # rather than reused so the seed exercises the same path a real signup does.
+    for i, (name, mc, email, plan, person) in enumerate(ORGS, start=1):
+        org = cur.execute(
+            """INSERT INTO organizations (name, mc_number, billing_email, plan, slug)
+               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+            (name, mc, email, plan, slugify(name, str(i)))).fetchone()
+        cur.execute(
+            """INSERT INTO users (org_id, email, password_hash, full_name, role)
+               VALUES (%s, %s, %s, %s, 'owner')""",
+            (org["id"], email, hash_password(DEMO_PASSWORD), person))
 
     rows = carriers()
     cur.executemany(
@@ -182,17 +198,17 @@ def seed(conn, verbose=True):
         "INSERT INTO phone_intel (phone, line_type, carrier_name) VALUES (%s, %s, %s)",
         PHONE_INTEL)
 
-    for days_ago, broker_id, mc, email, phone, name, value in HISTORY:
-        run_check(conn, broker_id, mc, email, phone, name, value, at=stamp(days_ago))
+    for days_ago, org_id, mc, email, phone, name, value in HISTORY:
+        run_check(conn, org_id, mc, email, phone, name, value, at=stamp(days_ago))
 
     cur.executemany(
         """INSERT INTO fraud_reports
-             (broker_id, mc_number, reported_email, reported_phone, incident_type,
+             (org_id, mc_number, reported_email, reported_phone, incident_type,
               amount_lost_usd, notes, verified, created_at)
            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""", fraud_reports())
 
     if verbose:
-        print(f"Seeded {len(rows)} carriers, {len(HISTORY)} historical checks, "
+        print(f"Seeded {len(ORGS)} orgs, {len(rows)} carriers, {len(HISTORY)} historical checks, "
               f"{len(fraud_reports())} fraud reports.")
     return True
 
@@ -217,7 +233,7 @@ def verify(conn):
 
     print("\n=== Every seeded carrier, checked with its own contact of record ===")
     for c in conn.execute("SELECT * FROM carriers ORDER BY mc_number").fetchall():
-        r = evaluate(conn, DEMO_BROKER_ID, c["mc_number"],
+        r = evaluate(conn, DEMO_ORG_ID, c["mc_number"],
                      c["registered_email"], c["registered_phone"], load_value=75000)
         top = r["signals"][0].label if r["signals"] else "nothing to report"
         want = EXPECTED.get(c["mc_number"])
@@ -230,7 +246,7 @@ def verify(conn):
               f"{c['legal_name'][:32]:<34} {top}")
 
     print("\n=== The impersonation: same MC number, different human ===")
-    r = evaluate(conn, DEMO_BROKER_ID, "MC-471902",
+    r = evaluate(conn, DEMO_ORG_ID, "MC-471902",
                  "dispatch@greatlakesfreight-sys.com", "(872) 555-0417", load_value=75000)
     if (r["verdict"], r["score"]) != EXPECTED_IMPOSTOR:
         failures.append(f"impostor: expected {EXPECTED_IMPOSTOR}, got "
@@ -243,13 +259,21 @@ def verify(conn):
 
 
 def main():
+    # Demo logins share one well-known password. Creating them against a live
+    # database would hand anyone who reads this file four working accounts.
+    if db.cfg.IS_PRODUCTION:
+        sys.exit("seed.py refuses to run with APP_ENV=production.")
+
     if "--reset" in sys.argv:
         db.reset()
     else:
         db.migrate()
 
     with db.connection() as conn:
-        seed(conn)
+        if seed(conn):
+            print(f"\nSign in as any of these, password '{DEMO_PASSWORD}':")
+            for name, _, email, plan, _ in ORGS:
+                print(f"  {email:<34} {name} ({plan})")
 
     # Verification runs in its own read-only transaction, against committed data.
     with db.connection() as conn:

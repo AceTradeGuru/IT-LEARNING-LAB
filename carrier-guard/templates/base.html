@@ -15,11 +15,17 @@
   header { background:var(--navy); color:#fff; padding:0.9rem 2rem; display:flex; align-items:center; gap:2rem; flex-wrap:wrap; }
   .logo { font-size:1.35rem; font-weight:800; letter-spacing:-0.5px; }
   .logo span { color:var(--teal); }
-  nav { flex:1; }
-  nav a { color:#cbd5e1; text-decoration:none; margin-right:1.2rem; font-weight:600; font-size:0.95rem; }
+  nav { flex:1; display:flex; flex-wrap:wrap; gap:0 1.2rem; }
+  nav a { color:#cbd5e1; text-decoration:none; font-weight:600; font-size:0.95rem; white-space:nowrap; }
   nav a:hover, nav a.active { color:#fff; }
-  .actas { display:flex; align-items:center; gap:0.5rem; font-size:0.8rem; color:#94a3b8; white-space:nowrap; }
-  .actas select { padding:0.3rem 0.5rem; border-radius:6px; border:1px solid #334155; background:var(--navy2); color:#fff; font-size:0.82rem; }
+  .actas { display:flex; align-items:center; gap:0.9rem; font-size:0.82rem; color:#94a3b8; white-space:nowrap; }
+  .actas a { color:#cbd5e1; text-decoration:none; font-weight:600; }
+  .actas a:hover { color:#fff; }
+  .actas .who { display:flex; flex-direction:column; line-height:1.25; color:#e2e8f0; font-weight:700; }
+  .actas .who em { font-style:normal; font-weight:600; color:#7dd3fc; font-size:0.72rem; }
+  .linkbtn { background:none; border:none; color:#cbd5e1; font:inherit; font-weight:600; cursor:pointer; padding:0; }
+  .linkbtn:hover { color:#fff; }
+  .keyline { font-family:ui-monospace,'SF Mono',Menlo,monospace; background:#0f2540; color:#5eead4; padding:0.9rem 1rem; border-radius:8px; word-break:break-all; font-size:0.9rem; }
   main { max-width:1100px; margin:2rem auto; padding:0 1.5rem; }
   h1 { font-size:1.6rem; margin-bottom:0.3rem; letter-spacing:-0.3px; }
   h2 { font-size:1.15rem; margin:1.6rem 0 0.8rem; }
@@ -88,20 +94,28 @@
   <div class="logo">Carrier<span>Guard</span></div>
   <nav>
     <a href="{{ url_for('index') }}">Home</a>
-    <a href="{{ url_for('check') }}">Run a check</a>
-    <a href="{{ url_for('registry') }}">Registry</a>
-    <a href="{{ url_for('network') }}">Network</a>
-    <a href="{{ url_for('report') }}">Report fraud</a>
+    {% if current_user %}
+      <a href="{{ url_for('check') }}">Run a check</a>
+      <a href="{{ url_for('registry') }}">Registry</a>
+      <a href="{{ url_for('network') }}">Network</a>
+      <a href="{{ url_for('report') }}">Report fraud</a>
+    {% endif %}
   </nav>
-  <form class="actas" method="post" action="{{ url_for('act_as') }}">
-    <input type="hidden" name="next" value="{{ request.path }}">
-    <span>Acting as</span>
-    <select name="broker_id" onchange="this.form.submit()">
-      {% for b in all_brokers %}
-        <option value="{{ b.id }}" {% if me and b.id == me.id %}selected{% endif %}>{{ b.company_name }}</option>
-      {% endfor %}
-    </select>
-  </form>
+  <div class="actas">
+    {% if current_user %}
+      <span class="who">
+        {{ current_org.name }}
+        <em>{{ quota_used }}{% if quota_limit %}/{{ quota_limit }}{% endif %} checks</em>
+      </span>
+      <a href="{{ url_for('settings') }}">Settings</a>
+      <form method="post" action="{{ url_for('logout') }}" style="display:inline;">
+        <button type="submit" class="linkbtn">Sign out</button>
+      </form>
+    {% else %}
+      <a href="{{ url_for('login') }}">Sign in</a>
+      <a class="btn btn-primary btn-sm" href="{{ url_for('signup') }}">Start free</a>
+    {% endif %}
+  </div>
 </header>
 <main>
   {% with messages = get_flashed_messages() %}

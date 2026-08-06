@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<h1>{{ current_org.name }}</h1>
+<p class="sub">
+  {{ current_org.plan|title }} plan &middot;
+  {{ quota_used }}{% if quota_limit %} of {{ quota_limit }}{% else %} (unmetered){% endif %}
+  checks this period, since {{ current_org.period_start }}
+</p>
+
+{% if new_key %}
+<div class="card" style="border-color:var(--teal); border-width:2px;">
+  <h2 style="margin-top:0;">Your new API key</h2>
+  <p class="muted" style="margin-bottom:0.8rem;">
+    Copy it now. Only a hash is stored, so this is the one and only time it can
+    be displayed — if you lose it, revoke it and create another.
+  </p>
+  <div class="keyline">{{ new_key }}</div>
+</div>
+{% endif %}
+
+<div class="grid grid-2" style="align-items:start;">
+  <div>
+    <h2 style="margin-top:0;">API keys</h2>
+    <div class="card">
+      <form method="post" action="{{ url_for('create_api_key') }}">
+        <label for="name">Name this key</label>
+        <input id="name" name="name" maxlength="80"
+               placeholder="McLeod production" required>
+        <div style="margin-top:0.9rem;">
+          <button class="btn btn-primary btn-sm" type="submit">Create key</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      {% if keys %}
+      <table>
+        <tr><th>Name</th><th>Key</th><th>Last used</th><th>Status</th><th></th></tr>
+        {% for k in keys %}
+        <tr {% if k.revoked_at %}style="opacity:0.5;"{% endif %}>
+          <td>{{ k.name }}<br><span class="muted">{{ k.created_by_email or '—' }}</span></td>
+          <td class="mono">{{ k.key_prefix }}…</td>
+          <td class="muted">
+            {{ k.last_used_at.strftime('%Y-%m-%d %H:%M') if k.last_used_at else 'never' }}
+          </td>
+          <td>
+            {% if k.revoked_at %}
+              <span class="badge block">revoked</span>
+            {% else %}
+              <span class="badge clear">active</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if not k.revoked_at %}
+            <form method="post"
+                  action="{{ url_for('revoke_api_key', key_id=k.id) }}"
+                  style="display:inline;">
+              <button class="btn btn-red btn-sm" type="submit">Revoke</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% else %}
+        <p class="muted">No API keys yet.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <h2 style="margin-top:0;">Using the API</h2>
+    <div class="card">
+      <p class="muted" style="line-height:1.6; margin-bottom:0.9rem;">
+        Fire a check from your TMS at tender time. Nobody remembers to open a
+        website at 4:50pm on a Friday — this is how the product actually gets used.
+      </p>
+      <pre class="keyline" style="white-space:pre-wrap; font-size:0.78rem;">curl -X POST {{ request.url_root }}api/v1/checks \
+  -H "Authorization: Bearer cg_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"mc_number": "MC-471902",
+       "contact_email": "dispatch@example.com",
+       "contact_phone": "313-555-0188",
+       "load_value_usd": 78000}'</pre>
+      <p class="muted" style="margin-top:0.9rem; line-height:1.6;">
+        Returns the verdict, the risk score, and every signal that fired.
+        <span class="mono">GET /api/v1/usage</span> reports your allowance.
+      </p>
+    </div>
+
+    <h2>Team</h2>
+    <div class="card">
+      <table>
+        <tr><th>Email</th><th>Name</th><th>Role</th><th>Last sign-in</th></tr>
+        {% for m in members %}
+        <tr>
+          <td>{{ m.email }}</td>
+          <td>{{ m.full_name or '—' }}</td>
+          <td>{{ m.role }}</td>
+          <td class="muted">
+            {{ m.last_login_at.strftime('%Y-%m-%d') if m.last_login_at else 'never' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -20,7 +20,7 @@ def network_stats(conn):
           (SELECT COALESCE(SUM(load_value_usd), 0) FROM checks
              WHERE verdict = 'block')                                     AS value_protected,
           (SELECT COUNT(*) FROM carriers)                                 AS carriers,
-          (SELECT COUNT(*) FROM brokers)                                  AS brokers,
+          (SELECT COUNT(*) FROM organizations WHERE status = 'active')    AS brokers,
           (SELECT COUNT(*) FROM fraud_reports)                            AS reports,
           (SELECT COALESCE(SUM(amount_lost_usd), 0) FROM fraud_reports
              WHERE verified)                                              AS losses

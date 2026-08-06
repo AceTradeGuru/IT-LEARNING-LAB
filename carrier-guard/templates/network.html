@@ -37,17 +37,20 @@
   </table>
 </div>
 
-<h2>Recent checks across the network</h2>
+<h2>Your recent checks</h2>
+<p class="sub">
+  The totals above are network-wide. This feed is yours alone — which carriers you
+  vet is not shared with other subscribers.
+</p>
 <div class="card">
   <table>
     <tr>
-      <th>When</th><th>Broker</th><th>MC</th><th>Contact used</th>
+      <th>When</th><th>MC</th><th>Contact used</th>
       <th>Load value</th><th>Score</th><th>Verdict</th><th></th>
     </tr>
     {% for c in checks %}
     <tr>
       <td class="muted">{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-      <td>{{ c.company_name }}</td>
       <td class="mono">{{ c.mc_number }}</td>
       <td class="mono muted">{{ c.contact_email or '—' }}</td>
       <td>{% if c.load_value_usd %}${{ '{:,}'.format(c.load_value_usd) }}{% else %}—{% endif %}</td>
@@ -60,8 +63,10 @@
 </div>
 
 <p class="muted" style="line-height:1.6; max-width:70ch;">
-  Look at the checks against <span class="mono">MC-775410</span>. Four brokers, four
-  different dispatch emails, nineteen days. Not one of those brokers could have seen the
-  pattern alone — and the government record on that carrier is spotless.
+  Run a check on <span class="mono">MC-775410</span> to see what this buys you. Four
+  brokerages were shown four different dispatch emails by that MC number in nineteen
+  days. None of them could have seen the pattern alone, and its government record is
+  spotless — the raw checks stay private to each subscriber, but the pattern they add up
+  to protects everyone.
 </p>
 {% endblock %}

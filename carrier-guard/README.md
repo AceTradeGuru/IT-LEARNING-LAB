@@ -35,9 +35,11 @@ docker compose up -d db
 
 Open http://localhost:5002
 
-`seed.py` migrates, loads the demo data, then **re-scores every scenario and fails
-loudly if any verdict has moved.** If you change a rule weight, that's your regression
-test — run it before you commit.
+`seed.py` prints four demo logins when it runs (password `carrierguard-demo`). It also
+migrates, loads the demo data, then **re-scores every scenario and fails loudly if any
+verdict has moved.** If you change a rule weight, that's your regression test — run it
+before you commit. It refuses to run at all with `APP_ENV=production`, since those demo
+logins share one well-known password.
 
 ```bash
 .venv/bin/python seed.py --reset   # drop, migrate, reseed, verify
@@ -126,11 +128,13 @@ The signals, by source:
 | `db.py` | Pooled Postgres connections and the migration runner. |
 | `migrations/` | Versioned SQL. Applied in filename order, each in its own transaction. |
 | `config.py` | Environment-driven config. Fails fast in production on missing secrets. |
+| `auth.py` | Passwords, sessions, API keys, tenancy, plan metering. |
+| `api.py` | The JSON API. |
 | `queries.py` | Read queries shared across routes. |
 | `app.py` | Flask routes, input validation, error handling. |
 | `seed.py` | Development data — and the verdict regression test. |
 
-Two decisions worth knowing before you change things:
+Four decisions worth knowing before you change things:
 
 **Transactions belong to the caller.** `run_check()` never commits; the `db.connection()`
 block that wraps it does. That's what guarantees a failed check leaves no orphaned row
@@ -139,6 +143,51 @@ behind, and it lets the engine be tested inside a transaction that gets rolled b
 **Migrations take an advisory lock.** A rolling deploy starts several workers at once.
 Without the lock they would each read the same empty `schema_migrations` and race to apply
 the same DDL — one wins, the rest crash-loop.
+
+**Check history is private; fraud reports are shared.** This is the central tenancy
+decision and it cuts both ways deliberately. A brokerage's check history is a list of
+exactly which carriers it is about to do business with — publishing that to competitors
+would be worse than publishing nothing. But a fraud warning nobody can see protects
+nobody. So `/network` shows network-wide aggregates and network-wide fraud reports, and
+only *your* per-check feed. Reading a check by id is scoped by org, and an out-of-tenant
+id returns 404 rather than 403 — telling a caller that a check exists but belongs to
+someone else leaks the very thing being protected.
+
+**API keys are stored hashed, never in a URL.** Only a SHA-256 is kept, so the table is
+useless if it leaks. The plaintext key is shown once, carried to that page in the session
+rather than a query string — a key in a URL ends up in browser history, proxy logs, and
+the `Referer` header of the next request.
+
+## Accounts and the API
+
+Signup creates an organization and its first owner user. Every check, observation, and
+fraud report is attributed to the org, and plan usage is metered per org:
+
+| Plan | Checks / period |
+|---|---|
+| Starter | 250 |
+| Pro | 1,500 |
+| Enterprise | unmetered |
+
+Exceeding the allowance returns `429 quota_exceeded` from the API and redirects to
+settings in the UI.
+
+The API is how the product actually gets used — a TMS fires a check at tender time,
+because nobody remembers to open a website at 4:50pm on a Friday.
+
+```bash
+curl -X POST https://…/api/v1/checks \
+  -H "Authorization: Bearer cg_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"mc_number": "MC-471902",
+       "contact_email": "dispatch@greatlakesfreight-sys.com",
+       "contact_phone": "872-555-0417",
+       "load_value_usd": 78000}'
+```
+
+Returns the verdict, the risk score, the carrier record, and every signal that fired.
+`GET /api/v1/checks/<id>` retrieves a past check (scoped to the key's org);
+`GET /api/v1/usage` reports the current allowance.
 
 ## Deployment
 
@@ -176,8 +225,8 @@ Config reference: `.env.example`.
 | Seeded `phone_intel` table | Twilio Lookup — line type and provisioning age |
 | `address_type` column | USPS CMRA database + address verification |
 | Insurance columns | FMCSA L&I insurance filings, plus certificate parsing |
-| Broker selector in the header | Real accounts, orgs, sessions, API keys |
 | `verified` flag set by hand | Ops review queue for incoming fraud reports |
+| No billing | Stripe subscription against the existing per-org usage meter |
 
 ## Roadmap
 
