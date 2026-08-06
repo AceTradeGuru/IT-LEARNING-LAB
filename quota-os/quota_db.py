@@ -31,10 +31,10 @@ Everything is dated relative to today, so the demo never goes stale.
 
 import json
 import random
-import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import db
 from ai_engine import _offline_interview, _offline_score
 
 DB_FILE = Path(__file__).parent / "quotaos.db"
@@ -45,10 +45,8 @@ RNG = random.Random(1104)   # fixed seed: the demo looks the same every rebuild
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    """SQLite locally, Postgres when DATABASE_URL is set. See db.py."""
+    return db.connect(DB_FILE)
 
 
 def create_tables():
@@ -180,13 +178,13 @@ def _email(name):
     return f"{first[0]}{last.replace(' ', '')}@quotaos.example"
 
 
-def seed_org(conn):
+def seed_org(conn, org_id):
     """Insert the org chart, then generate deals and activity for each rep."""
     vp_id = conn.execute(
-        """INSERT INTO reps (name, email, title, role, manager_id, team, region, segment,
+        """INSERT INTO reps (org_id, name, email, title, role, manager_id, team, region, segment,
                              hire_date, ramp_end_date, quota_annual, notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("Dana Whitfield", "dwhitfield@quotaos.example", "VP of Sales", "vp", None,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (org_id, "Dana Whitfield", "dwhitfield@quotaos.example", "VP of Sales", "vp", None,
          "Global", "All", "All", _iso(TODAY - timedelta(days=1500)), None, 0,
          "Runs the whole org. Opens this dashboard first thing every Monday."),
     ).lastrowid
@@ -194,10 +192,10 @@ def seed_org(conn):
     manager_ids = {}
     for name, team, segment, region in MANAGERS:
         manager_ids[team] = conn.execute(
-            """INSERT INTO reps (name, email, title, role, manager_id, team, region, segment,
+            """INSERT INTO reps (org_id, name, email, title, role, manager_id, team, region, segment,
                                  hire_date, ramp_end_date, quota_annual, notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (name, _email(name), f"Sales Manager, {team}", "manager", vp_id, team,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, name, _email(name), f"Sales Manager, {team}", "manager", vp_id, team,
              region, segment, _iso(TODAY - timedelta(days=RNG.randint(700, 1400))),
              None, 0, f"Carries the {team} number through their team."),
         ).lastrowid
@@ -207,22 +205,22 @@ def seed_org(conn):
         hire = TODAY - timedelta(days=round(tenure_m * 30.4))
         ramp_end = _iso(hire + timedelta(days=ramp_days)) if ramp_days else None
         rid = conn.execute(
-            """INSERT INTO reps (name, email, title, role, manager_id, team, region, segment,
+            """INSERT INTO reps (org_id, name, email, title, role, manager_id, team, region, segment,
                                  hire_date, ramp_end_date, quota_annual, notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (name, _email(name), f"Account Executive, {segment}", "rep",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, name, _email(name), f"Account Executive, {segment}", "rep",
              manager_ids[team], team, region, segment, _iso(hire), ramp_end,
              quota, spec["note"]),
         ).lastrowid
         rep_ids[name] = rid
-        _seed_deals(conn, rid, segment, quota, spec)
-        _seed_activity(conn, rid, spec)
+        _seed_deals(conn, org_id, rid, segment, quota, spec)
+        _seed_activity(conn, org_id, rid, spec)
 
     conn.commit()
     return vp_id, manager_ids, rep_ids
 
 
-def _seed_deals(conn, rep_id, segment, quota_annual, spec):
+def _seed_deals(conn, org_id, rep_id, segment, quota_annual, spec):
     lo, hi = _DEAL_BAND[segment]
     quota_q = quota_annual / 4
 
@@ -230,11 +228,11 @@ def _seed_deals(conn, rep_id, segment, quota_annual, spec):
         prob = {"discovery": 15, "demo": 30, "proposal": 55, "negotiation": 75,
                 "closed_won": 100, "closed_lost": 0}[stage]
         conn.execute(
-            """INSERT INTO deals (rep_id, account, amount, stage, probability, created_date,
-                                  close_date, close_date_original, last_activity_date,
-                                  next_step, source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (rep_id, account, amount, stage, prob, _iso(created), _iso(close),
+            """INSERT INTO deals (org_id, rep_id, account, amount, stage, probability,
+                                  created_date, close_date, close_date_original,
+                                  last_activity_date, next_step, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, rep_id, account, amount, stage, prob, _iso(created), _iso(close),
              _iso(close_orig), _iso(last_act) if last_act else None, next_step,
              RNG.choice(_SOURCES)),
         )
@@ -322,7 +320,7 @@ def _seed_deals(conn, rep_id, segment, quota_annual, spec):
         add(_account(segment), amt, stage, created, close, close_orig, last_act, next_step)
 
 
-def _seed_activity(conn, rep_id, spec):
+def _seed_activity(conn, org_id, rep_id, spec):
     """Eight weeks of weekly activity, scaled by the rep's activity multiplier."""
     level = spec["activity"]
     monday = TODAY - timedelta(days=TODAY.weekday())
@@ -330,9 +328,9 @@ def _seed_activity(conn, rep_id, spec):
         week = monday - timedelta(weeks=w)
         jitter = RNG.uniform(0.8, 1.2)
         conn.execute(
-            """INSERT INTO activities (rep_id, week_start, calls, emails, meetings, demos)
-               VALUES (?,?,?,?,?,?)""",
-            (rep_id, _iso(week),
+            """INSERT INTO activities (org_id, rep_id, week_start, calls, emails, meetings, demos)
+               VALUES (?,?,?,?,?,?,?)""",
+            (org_id, rep_id, _iso(week),
              round(48 * level * jitter), round(120 * level * jitter),
              round(9 * level * jitter), round(4 * level * jitter)),
         )
@@ -398,27 +396,28 @@ TRACKS = [
 ]
 
 
-def seed_training(conn, rep_ids):
+def seed_training(conn, org_id, rep_ids):
     course_ids = {}
     for code, title, cat, hours, summary, fixes in COURSES:
         course_ids[code] = conn.execute(
-            "INSERT INTO courses (code, title, category, hours, summary, fixes_signal) "
-            "VALUES (?,?,?,?,?,?)",
-            (code, title, cat, hours, summary, fixes),
+            "INSERT INTO courses (org_id, code, title, category, hours, summary, fixes_signal) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (org_id, code, title, cat, hours, summary, fixes),
         ).lastrowid
 
     track_ids = {}
     for name, summary, req_for, months, mandatory, codes in TRACKS:
         tid = conn.execute(
-            "INSERT INTO cert_tracks (name, summary, required_for, valid_months, is_mandatory) "
-            "VALUES (?,?,?,?,?)",
-            (name, summary, req_for, months, mandatory),
+            "INSERT INTO cert_tracks (org_id, name, summary, required_for, valid_months, "
+            "is_mandatory) VALUES (?,?,?,?,?,?)",
+            (org_id, name, summary, req_for, months, mandatory),
         ).lastrowid
         track_ids[name] = tid
         for i, code in enumerate(codes):
             conn.execute(
-                "INSERT INTO track_courses (track_id, course_id, sequence) VALUES (?,?,?)",
-                (tid, course_ids[code], i + 1),
+                "INSERT INTO track_courses (org_id, track_id, course_id, sequence) "
+                "VALUES (?,?,?,?)",
+                (org_id, tid, course_ids[code], i + 1),
             )
 
     # --- certifications, with the exceptions that drive the compliance signals -
@@ -438,8 +437,8 @@ def seed_training(conn, rep_ids):
             # A rep 45 days in hasn't finished the depth track yet.
             if tenure < 100 and not track["is_mandatory"]:
                 conn.execute(
-                    "INSERT INTO certifications (rep_id, track_id, status) VALUES (?,?,?)",
-                    (rid, tid, "in_progress"))
+                    "INSERT INTO certifications (org_id, rep_id, track_id, status) "
+                    "VALUES (?,?,?,?)", (org_id, rid, tid, "in_progress"))
                 continue
 
             if name == "Omar Haddad" and track_name == "Security & Data Handling":
@@ -454,8 +453,8 @@ def seed_training(conn, rep_ids):
                 status = "certified"
             elif tenure < 60 and track["is_mandatory"]:
                 conn.execute(
-                    "INSERT INTO certifications (rep_id, track_id, status) VALUES (?,?,?)",
-                    (rid, tid, "in_progress"))
+                    "INSERT INTO certifications (org_id, rep_id, track_id, status) "
+                    "VALUES (?,?,?,?)", (org_id, rid, tid, "in_progress"))
                 continue
             else:
                 certified = TODAY - timedelta(days=RNG.randint(30, 300))
@@ -463,18 +462,20 @@ def seed_training(conn, rep_ids):
                 status = "certified" if expires > TODAY else "expired"
 
             conn.execute(
-                """INSERT INTO certifications (rep_id, track_id, status, certified_on, expires_on)
-                   VALUES (?,?,?,?,?)""",
-                (rid, tid, status, _iso(certified), _iso(expires)),
+                """INSERT INTO certifications (org_id, rep_id, track_id, status,
+                                              certified_on, expires_on)
+                   VALUES (?,?,?,?,?,?)""",
+                (org_id, rid, tid, status, _iso(certified), _iso(expires)),
             )
 
             # Completed enrollments for the courses inside a finished track.
             for code in dict((t[0], t[5]) for t in TRACKS)[track_name]:
                 conn.execute(
                     """INSERT OR IGNORE INTO enrollments
-                       (rep_id, course_id, status, score, assigned_on, completed_on, assigned_reason)
-                       VALUES (?,?,?,?,?,?,?)""",
-                    (rid, course_ids[code], "complete", RNG.randint(78, 98),
+                       (org_id, rep_id, course_id, status, score, assigned_on, completed_on,
+                        assigned_reason)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (org_id, rid, course_ids[code], "complete", RNG.randint(78, 98),
                      _iso(certified - timedelta(days=20)), _iso(certified),
                      f"Required for {track_name}"),
                 )
@@ -488,10 +489,10 @@ def seed_training(conn, rep_ids):
     for i, code in enumerate(scheduled):
         starts = TODAY + timedelta(days=3 + i * 4, hours=0)
         conn.execute(
-            """INSERT INTO class_sessions (course_id, starts_at, duration_h, location,
+            """INSERT INTO class_sessions (org_id, course_id, starts_at, duration_h, location,
                                            instructor, seats)
-               VALUES (?,?,?,?,?,?)""",
-            (course_ids[code], f"{_iso(starts)} {RNG.choice(['09:00', '11:00', '13:00', '15:00'])}",
+               VALUES (?,?,?,?,?,?,?)""",
+            (org_id, course_ids[code], f"{_iso(starts)} {RNG.choice(['09:00', '11:00', '13:00', '15:00'])}",
              RNG.choice([1.5, 2.0, 3.0]), RNG.choice(locations), RNG.choice(instructors),
              RNG.choice([12, 16, 20, 25])),
         )
@@ -637,16 +638,17 @@ CANDIDATES = [
 ]
 
 
-def seed_hiring(conn, rep_ids, course_ids):
+def seed_hiring(conn, org_id, rep_ids, course_ids):
     """Reqs, candidates, applications, and one interview loop already completed."""
     req_ids = {}
     for r in REQS:
         req_ids[r["title"]] = conn.execute(
-            """INSERT INTO reqs (title, level, team, region, segment, quota_annual, comp_base,
-                                 comp_ote, must_haves, nice_haves, hiring_manager_id, status,
-                                 created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (r["title"], r["level"], r["team"], r["region"], r["segment"], r["quota_annual"],
+            """INSERT INTO reqs (org_id, title, level, team, region, segment, quota_annual,
+                                 comp_base, comp_ote, must_haves, nice_haves,
+                                 hiring_manager_id, status, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, r["title"], r["level"], r["team"], r["region"], r["segment"],
+             r["quota_annual"],
              r["comp_base"], r["comp_ote"], r["must_haves"], r["nice_haves"],
              conn.execute("SELECT id FROM reps WHERE name = ?", (r["manager"],)).fetchone()["id"],
              r["status"], _iso(TODAY - timedelta(days=RNG.randint(8, 40)))),
@@ -655,10 +657,11 @@ def seed_hiring(conn, rep_ids, course_ids):
     cand_ids = {}
     for c in CANDIDATES:
         cand_ids[c["name"]] = conn.execute(
-            """INSERT INTO candidates (name, email, phone, location, years_exp, current_title,
-                                       current_company, resume_text, source, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (c["name"], c["email"], c["phone"], c["location"], c["years_exp"],
+            """INSERT INTO candidates (org_id, name, email, phone, location, years_exp,
+                                       current_title, current_company, resume_text, source,
+                                       created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, c["name"], c["email"], c["phone"], c["location"], c["years_exp"],
              c["current_title"], c["current_company"], "\n".join(c["resume"]), c["source"],
              _iso(TODAY - timedelta(days=RNG.randint(2, 30)))),
         ).lastrowid
@@ -684,10 +687,11 @@ def seed_hiring(conn, rep_ids, course_ids):
     for req_id, cand_name, stage, score, reason in pipeline:
         created = TODAY - timedelta(days=RNG.randint(3, 25))
         aid = conn.execute(
-            """INSERT INTO applications (req_id, candidate_id, stage, match_score, match_reason,
-                                         created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?)""",
-            (req_id, cand_ids[cand_name], stage, score, reason, _iso(created), _iso(TODAY)),
+            """INSERT INTO applications (org_id, req_id, candidate_id, stage, match_score,
+                                         match_reason, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (org_id, req_id, cand_ids[cand_name], stage, score, reason,
+             _iso(created), _iso(TODAY)),
         ).lastrowid
         app_ids[(req_id, cand_name)] = aid
 
@@ -696,15 +700,16 @@ def seed_hiring(conn, rep_ids, course_ids):
         path = ladder[:ladder.index(stage) + 1] if stage in ladder else ["sourced", "rejected"]
         for i, s in enumerate(path):
             conn.execute(
-                """INSERT INTO stage_events (application_id, from_stage, to_stage, note, created_at)
-                   VALUES (?,?,?,?,?)""",
-                (aid, path[i - 1] if i else None, s,
+                """INSERT INTO stage_events (org_id, application_id, from_stage, to_stage,
+                                             note, created_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (org_id, aid, path[i - 1] if i else None, s,
                  "Seeded demo history", _iso(created + timedelta(days=i * 2))),
             )
 
     # One completed interview loop, scored at seed time by the offline engine so
     # the scorecard exists on a laptop with no API key.
-    _seed_completed_interview(conn, req_ids, app_ids, ent)
+    _seed_completed_interview(conn, org_id, req_ids, app_ids, ent)
 
     conn.commit()
     return req_ids, cand_ids
@@ -734,18 +739,19 @@ _DEMO_ANSWERS = {
 }
 
 
-def _seed_completed_interview(conn, req_ids, app_ids, ent_req_id):
+def _seed_completed_interview(conn, org_id, req_ids, app_ids, ent_req_id):
     req = conn.execute("SELECT * FROM reqs WHERE id = ?", (ent_req_id,)).fetchone()
     aid = app_ids[(ent_req_id, "Marisol Vega")]
     questions = _offline_interview(req, "screen", 6)
     answers = {str(k): v for k, v in _DEMO_ANSWERS.items()}
     result = _offline_score(questions, answers)
     conn.execute(
-        """INSERT INTO interviews (application_id, kind, questions_json, answers_json,
+        """INSERT INTO interviews (org_id, application_id, kind, questions_json, answers_json,
                                    scores_json, overall_score, recommendation, summary,
                                    engine, created_at, completed_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (aid, "screen", json.dumps(questions), json.dumps(answers), json.dumps(result),
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (org_id, aid, "screen", json.dumps(questions), json.dumps(answers),
+         json.dumps(result),
          result["overall_score"], result["recommendation"], result["summary"], "offline",
          _iso(TODAY - timedelta(days=6)), _iso(TODAY - timedelta(days=6))),
     )
@@ -753,31 +759,70 @@ def _seed_completed_interview(conn, req_ids, app_ids, ent_req_id):
 
 # ------------------------------------------------------------------- build --
 
+# Logins created alongside the demo org, one per role so the access model can be
+# seen rather than described. These are demo credentials in a seed file — the
+# signup flow is what a real tenant uses, and DEPLOY.md says not to seed in prod.
+DEMO_PASSWORD = "quotaos-demo-2026"
+DEMO_USERS = [
+    ("Dana Whitfield", "dana@northwind.example", "owner", "Dana Whitfield"),
+    ("Sales Ops", "ops@northwind.example", "admin", None),
+    ("Marcus Bell", "marcus@northwind.example", "manager", "Marcus Bell"),
+    ("Priya Raghunathan", "priya@northwind.example", "manager", "Priya Raghunathan"),
+    ("Greg Nowak", "greg@northwind.example", "member", "Greg Nowak"),
+]
+
+
 def seed_sample_data():
+    """Create the demo tenant, its logins, and one org's worth of data."""
+    import auth
+
     conn = get_connection()
-    if conn.execute("SELECT COUNT(*) n FROM reps").fetchone()["n"]:
+    if conn.execute("SELECT COUNT(*) n FROM orgs").fetchone()["n"]:
         conn.close()
         return
-    vp_id, manager_ids, rep_ids = seed_org(conn)
-    course_ids, track_ids = seed_training(conn, rep_ids)
-    seed_hiring(conn, rep_ids, course_ids)
+
+    org_id = conn.execute(
+        "INSERT INTO orgs (name, slug, plan, status, created_at) VALUES (?,?,?,?,?)",
+        ("Northwind Systems", "northwind", "growth", "active", _iso(TODAY)),
+    ).lastrowid
+
+    vp_id, manager_ids, rep_ids = seed_org(conn, org_id)
+    course_ids, track_ids = seed_training(conn, org_id, rep_ids)
+    seed_hiring(conn, org_id, rep_ids, course_ids)
+
+    all_reps = {r["name"]: r["id"] for r in
+                conn.execute("SELECT id, name FROM reps WHERE org_id = ?", (org_id,))}
+    for name, email, role, rep_name in DEMO_USERS:
+        conn.execute(
+            """INSERT INTO users (org_id, email, password_hash, name, role, rep_id,
+                                  status, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (org_id, email, auth.hash_password(DEMO_PASSWORD), name, role,
+             all_reps.get(rep_name), "active", _iso(TODAY)),
+        )
+    conn.commit()
     conn.close()
 
 
 def rebuild():
-    if DB_FILE.exists():
+    # On Postgres the schema script drops its own tables; there is no file to
+    # remove, and removing the local one would be a no-op pointing at nothing.
+    if not db.IS_POSTGRES and DB_FILE.exists():
         DB_FILE.unlink()
     create_tables()
     seed_sample_data()
     conn = get_connection()
     counts = {t: conn.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()["n"]
-              for t in ("reps", "deals", "activities", "courses", "cert_tracks",
-                        "certifications", "enrollments", "class_sessions",
+              for t in ("orgs", "users", "reps", "deals", "activities", "courses",
+                        "cert_tracks", "certifications", "enrollments", "class_sessions",
                         "reqs", "candidates", "applications", "interviews")}
     conn.close()
     print(f"Built {DB_FILE.name}")
     for t, n in counts.items():
         print(f"  {t:<16} {n}")
+    print(f"\nDemo logins (password: {DEMO_PASSWORD})")
+    for name, email, role, _ in DEMO_USERS:
+        print(f"  {role:<8} {email:<28} {name}")
 
 
 if __name__ == "__main__":

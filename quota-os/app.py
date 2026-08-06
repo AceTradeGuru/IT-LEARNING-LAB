@@ -1,33 +1,56 @@
 """
-QuotaOS — sales org operating system (demo prototype).
+QuotaOS — sales org operating system.
 
 Monitor the floor, certify the bench, and hire the next seat — in one app.
 
-Run:
-    python3 app.py
-Then open http://localhost:5003
+Run locally:
+    python3 quota_db.py       # build and seed
+    python3 app.py            # http://localhost:5003
 
-The AI features (job postings, resume search, interview generation and scoring)
-call Claude when ANTHROPIC_API_KEY or an `ant auth login` profile is present, and
-fall back to a deterministic local engine otherwise. Every AI-produced artifact is
-labeled with which engine wrote it.
+Run in production (see DEPLOY.md):
+    QUOTAOS_ENV=production SECRET_KEY=... gunicorn -w 4 -b 0.0.0.0:8000 app:app
+
+Two invariants hold everywhere in this file:
+
+  1. **Every route is gated.** `@login_required` at minimum; `@role_required(...)`
+     where the action is privileged. There is no anonymous surface beyond the login
+     and signup pages.
+
+  2. **Every query filters on org_id.** Multi-tenant isolation is enforced in the
+     WHERE clause of each individual query, not by a middleware someone can forget
+     to apply. Row-level access below that (a manager sees their team, a rep sees
+     themselves) comes from `auth.visible_rep_ids`.
 """
 
 import json
 import re
+import sys
+import time
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from flask import (Flask, abort, flash, redirect, render_template, request,
+from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    session, url_for)
 from markupsafe import Markup, escape
 
 import ai_engine
+import auth
+from config import Config, validate
 from health_engine import (evaluate_org, evaluate_rep, pipeline_by_stage,
                            quarter_bounds, quarter_label, recommended_courses)
 from quota_db import DB_FILE, create_tables, get_connection, seed_sample_data
 
 app = Flask(__name__)
-app.secret_key = "quotaos-demo"
+app.config.from_object(Config)
+
+_problems = validate(Config)
+if _problems:
+    for p in _problems:
+        print(f"FATAL CONFIG: {p}", file=sys.stderr)
+    raise SystemExit(1)
+
+app.secret_key = Config.SECRET_KEY
+app.permanent_session_lifetime = timedelta(seconds=Config.PERMANENT_SESSION_LIFETIME)
 
 # The hiring funnel, in order. Everything about stage movement reads from here.
 STAGES = ["sourced", "screened", "ai_interview", "panel", "offer", "hired"]
@@ -41,28 +64,125 @@ STAGE_LABELS = {
     "rejected": "Rejected",
 }
 
+# ---------------------------------------------------------------- AI budget --
+#
+# Two independent guards, because they stop different failure modes:
+#
+#   * A **per-hour call limit**, in process memory, to blunt a runaway loop before
+#     it becomes money. Per-worker, so with four gunicorn workers the real ceiling
+#     is 4x the configured number — a deliberate stopgap until this moves to Redis.
+#
+#   * A **per-month dollar cap per org**, in the database, from the actual token
+#     usage the API reports. This one is authoritative and shared across workers,
+#     which is why the spend ledger is a table and not a dict.
+_ai_calls = defaultdict(list)
+
+
+def _month_key(today=None):
+    return (today or date.today()).strftime("%Y-%m")
+
+
+def ai_spend_cents(conn, org_id, month=None):
+    """What this org has spent on model calls in the given month, in cents."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cents), 0) AS c FROM ai_spend WHERE org_id = ? AND month = ?",
+        (org_id, month or _month_key()),
+    ).fetchone()
+    return float(row["c"] or 0)
+
+
+def ai_budget_check(conn, org_id, cap_cents):
+    """
+    Returns (ok, reason). Checked before the call, not after — the point is to
+    not make the request, and a guard that reports overspend afterwards is a
+    receipt, not a limit.
+    """
+    window = time.time() - 3600
+    calls = [t for t in _ai_calls[org_id] if t > window]
+    _ai_calls[org_id] = calls
+    if len(calls) >= Config.AI_CALLS_PER_HOUR:
+        return False, (f"Hourly AI limit reached ({Config.AI_CALLS_PER_HOUR} calls). "
+                       f"Try again shortly.")
+
+    spent = ai_spend_cents(conn, org_id)
+    if cap_cents and spent >= cap_cents:
+        return False, (f"Monthly AI budget of ${cap_cents / 100:,.0f} is used up "
+                       f"(${spent / 100:,.2f} spent). It resets on the 1st, or an "
+                       f"owner can raise the cap.")
+    return True, None
+
+
+def ai_budget_record(conn, org_id):
+    """
+    Bank the cost of whatever model calls just happened.
+
+    Offline-engine calls cost nothing and record nothing, so a tenant with no API
+    key never accrues spend.
+    """
+    _ai_calls[org_id].append(time.time())
+    cents = ai_engine.drain_cost_cents()
+    if cents:
+        conn.execute(
+            "INSERT INTO ai_spend (org_id, month, cents, created_at) VALUES (?,?,?,?)",
+            (org_id, _month_key(), cents, datetime.now().isoformat(timespec="seconds")),
+        )
+    return cents
+
+
+# --------------------------------------------------------------- lifecycle --
+
+@app.before_request
+def load_session():
+    """Attach the signed-in user to `g`, then guard every state change."""
+    g.user = None
+    uid = session.get(auth.SESSION_USER_KEY)
+    if uid:
+        conn = get_connection()
+        g.user = auth.load_user(conn, uid)
+        conn.close()
+        # A user deactivated or an org suspended mid-session loses access now,
+        # not whenever their cookie happens to expire.
+        if g.user is None or g.user["org_status"] != "active":
+            session.clear()
+            g.user = None
+
+    if request.method == "POST":
+        auth.csrf_validate()
+
 
 @app.context_processor
 def inject_globals():
-    """Nav state and engine status, on every page."""
-    conn = get_connection()
-    me_id = session.get("viewer_id")
-    viewers = conn.execute(
-        "SELECT * FROM reps WHERE role IN ('vp','manager') ORDER BY role DESC, name"
-    ).fetchall()
-    me = None
-    if viewers:
-        me = next((v for v in viewers if v["id"] == me_id), viewers[0])
-    conn.close()
     return {
-        "all_viewers": viewers,
-        "me": me,
+        "user": g.user,
         "engine": ai_engine.engine_status(),
         "stage_labels": STAGE_LABELS,
         "stages": STAGES,
         "today": date.today(),
+        "csrf_token": auth.csrf_token,
+        "has_role": auth.has_role,
     }
 
+
+@app.errorhandler(403)
+def forbidden(_):
+    return render_template("error.html", code=403, title="Not your data",
+                           message="Your role doesn't grant access to this page. If you "
+                                   "think it should, ask an admin in your organization."), 403
+
+
+@app.errorhandler(404)
+def not_found(_):
+    return render_template("error.html", code=404, title="Not found",
+                           message="No such record in your organization."), 404
+
+
+@app.errorhandler(400)
+def bad_request(e):
+    return render_template("error.html", code=400, title="Request rejected",
+                           message=getattr(e, "description", "Malformed request.")), 400
+
+
+# ---------------------------------------------------------------- filters --
 
 @app.template_filter("money")
 def money(value):
@@ -103,7 +223,8 @@ def markdown(text):
     Render the small Markdown subset the posting generator emits.
 
     A full Markdown library would be a dependency for headings, bullets, and bold
-    — that isn't a trade worth making for one template.
+    — that isn't a trade worth making for one template. Input is escaped first, so
+    a posting can't inject markup.
     """
     if not text:
         return ""
@@ -147,66 +268,225 @@ def nicedate(value):
     return datetime.strptime(value[:10], "%Y-%m-%d").date().strftime("%b %-d, %Y")
 
 
+# ------------------------------------------------------------------- auth --
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if g.user:
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        email = request.form.get("email", "")
+        password = request.form.get("password", "")
+        conn = get_connection()
+        user = auth.load_user_by_email(conn, email)
+        # One message for both "no such user" and "wrong password" — telling them
+        # apart is a free account-enumeration oracle.
+        if user is None or not auth.verify_password(user["password_hash"], password):
+            conn.close()
+            flash("Email or password is incorrect.")
+            return render_template("login.html", email=email), 401
+        auth.login_user(conn, user)
+        conn.close()
+        nxt = request.form.get("next") or url_for("dashboard")
+        # Only ever redirect within this app — an open redirect is a phishing tool.
+        if not nxt.startswith("/") or nxt.startswith("//"):
+            nxt = url_for("dashboard")
+        return redirect(nxt)
+    return render_template("login.html", email="")
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    auth.logout_user()
+    return redirect(url_for("login"))
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    """Self-serve tenant creation. The first user of a new org is its owner."""
+    if g.user:
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        f = request.form
+        org_name = f.get("org_name", "").strip()
+        name = f.get("name", "").strip()
+        email = f.get("email", "").strip().lower()
+        password = f.get("password", "")
+        slug = re.sub(r"[^a-z0-9]+", "-", org_name.lower()).strip("-") or "org"
+
+        problem = auth.password_problem(password)
+        if not org_name or not name or "@" not in email:
+            problem = "Organization, name, and a valid email are all required."
+        conn = get_connection()
+        if problem is None and auth.load_user_by_email(conn, email):
+            problem = "An account with that email already exists."
+        if problem is None and conn.execute(
+            "SELECT 1 FROM orgs WHERE slug = ?", (slug,)
+        ).fetchone():
+            slug = f"{slug}-{int(time.time()) % 100000}"
+        if problem:
+            conn.close()
+            flash(problem)
+            return render_template("signup.html", form=f), 400
+
+        org_id, user_id = auth.create_org_with_owner(
+            conn, org_name, slug, name, email, password)
+        user = auth.load_user(conn, user_id)
+        auth.login_user(conn, user)
+        conn.close()
+        flash(f"Welcome to QuotaOS. {org_name} is set up — start by adding your team.")
+        return redirect(url_for("dashboard"))
+    return render_template("signup.html", form={})
+
+
+@app.route("/settings/users", methods=["GET", "POST"])
+@auth.role_required("owner")
+def settings_users():
+    """Owner-only user management. Every SaaS tenant needs a second admin."""
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    if request.method == "POST":
+        f = request.form
+        email = f.get("email", "").strip().lower()
+        name = f.get("name", "").strip()
+        role = f.get("role", "member")
+        rep_id = f.get("rep_id") or None
+        password = f.get("password", "")
+
+        problem = auth.password_problem(password)
+        if role not in auth.ROLES:
+            problem = "Unknown role."
+        if not name or "@" not in email:
+            problem = "Name and a valid email are required."
+        if problem is None and auth.load_user_by_email(conn, email):
+            problem = "That email already has an account."
+        # A rep_id from the form is user input: confirm it belongs to this org
+        # before storing it, or a login could be bound to another tenant's seat.
+        if rep_id:
+            owned = conn.execute("SELECT 1 FROM reps WHERE id = ? AND org_id = ?",
+                                 (rep_id, org_id)).fetchone()
+            if not owned:
+                problem = "That seat isn't in your organization."
+        if problem:
+            flash(problem)
+        else:
+            conn.execute(
+                """INSERT INTO users (org_id, email, password_hash, name, role, rep_id,
+                                      status, created_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (org_id, email, auth.hash_password(password), name, role, rep_id,
+                 "active", date.today().isoformat()))
+            auth.audit(conn, "user.create", entity=f"user:{email}", detail={"role": role})
+            conn.commit()
+            flash(f"Added {name} as {role}.")
+        conn.close()
+        return redirect(url_for("settings_users"))
+
+    users = conn.execute(
+        """SELECT u.*, r.name rep_name FROM users u
+             LEFT JOIN reps r ON r.id = u.rep_id AND r.org_id = u.org_id
+            WHERE u.org_id = ? ORDER BY u.role DESC, u.name""",
+        (org_id,),
+    ).fetchall()
+    reps = conn.execute(
+        "SELECT * FROM reps WHERE org_id = ? AND status = 'active' ORDER BY name",
+        (org_id,),
+    ).fetchall()
+    conn.close()
+    return render_template("settings_users.html", users=users, reps=reps, roles=auth.ROLES)
+
+
+@app.route("/settings/audit")
+@auth.role_required("admin")
+def settings_audit():
+    """
+    The record of every AI-assisted decision, newest first.
+
+    This exists because employment-decision regulation expects it to, and because
+    "the model said 62" is not defensible without the input that produced it.
+    """
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    rows = conn.execute(
+        """SELECT a.*, u.name user_name FROM audit_log a
+             LEFT JOIN users u ON u.id = a.user_id AND u.org_id = a.org_id
+            WHERE a.org_id = ? ORDER BY a.created_at DESC, a.id DESC LIMIT 300""",
+        (org_id,),
+    ).fetchall()
+    spent = ai_spend_cents(conn, org_id)
+    cap = g.user["ai_cents_cap"]
+    conn.close()
+    return render_template("settings_audit.html", rows=rows, spent=spent, cap=cap,
+                           month=_month_key())
+
+
+# ------------------------------------------------------------------ floor --
+
 def _scope(conn):
     """
-    Whose numbers are we looking at?
+    Resolve this user's view: (manager_id filter, visible rep id set).
 
-    A VP sees the org; a manager sees their team. One `manager_id` filter carries
-    that all the way through the dashboard queries.
+    Admins and owners get (None, None) — the whole org. A manager is filtered to
+    their own team. A member sees only themselves.
     """
-    me_id = session.get("viewer_id")
-    me = conn.execute("SELECT * FROM reps WHERE id = ?", (me_id,)).fetchone() if me_id else None
-    if me is None:
-        me = conn.execute("SELECT * FROM reps WHERE role = 'vp' LIMIT 1").fetchone()
-    return me, (me["id"] if me and me["role"] == "manager" else None)
+    rep_ids = auth.visible_rep_ids(conn)
+    user = g.user
+    manager_id = user["rep_id"] if (user["role"] == "manager" and user["rep_id"]) else None
+    return manager_id, rep_ids
 
-
-@app.route("/viewer", methods=["POST"])
-def set_viewer():
-    session["viewer_id"] = int(request.form["viewer_id"])
-    return redirect(request.form.get("next") or url_for("dashboard"))
-
-
-# ------------------------------------------------------------------ floor ---
 
 @app.route("/")
+@auth.login_required
 def dashboard():
     conn = get_connection()
-    me, scope_id = _scope(conn)
-    org = evaluate_org(conn, manager_id=scope_id)
-    funnel = pipeline_by_stage(conn, manager_id=scope_id)
+    org_id = auth.current_org_id()
+    manager_id, rep_ids = _scope(conn)
+    org = evaluate_org(conn, org_id, manager_id=manager_id, rep_ids=rep_ids)
+    funnel = pipeline_by_stage(conn, org_id, manager_id=manager_id, rep_ids=rep_ids)
     peak = max((f["amount"] for f in funnel), default=1) or 1
 
     teams = []
-    if not scope_id:
+    if auth.has_role("admin"):
         for m in conn.execute(
-            "SELECT * FROM reps WHERE role = 'manager' ORDER BY name"
+            "SELECT * FROM reps WHERE org_id = ? AND role = 'manager' ORDER BY name",
+            (org_id,),
         ).fetchall():
-            t = evaluate_org(conn, manager_id=m["id"])
-            teams.append({"manager": m, "org": t})
+            teams.append({"manager": m,
+                          "org": evaluate_org(conn, org_id, manager_id=m["id"])})
 
-    # The compliance number a VP wants in one glance: who cannot legally sell.
     lapsed = conn.execute(
         """SELECT r.id, r.name, t.name track FROM certifications c
-             JOIN reps r ON r.id = c.rep_id JOIN cert_tracks t ON t.id = c.track_id
-            WHERE c.status = 'expired' AND t.is_mandatory = 1 AND r.status = 'active'"""
+             JOIN reps r ON r.id = c.rep_id AND r.org_id = c.org_id
+             JOIN cert_tracks t ON t.id = c.track_id AND t.org_id = c.org_id
+            WHERE c.org_id = ? AND c.status = 'expired' AND t.is_mandatory = 1
+              AND r.status = 'active'""",
+        (org_id,),
     ).fetchall()
+    if rep_ids is not None:
+        lapsed = [l for l in lapsed if l["id"] in rep_ids]
 
-    open_reqs = conn.execute(
-        """SELECT q.*, COUNT(a.id) applicants FROM reqs q
-             LEFT JOIN applications a ON a.req_id = q.id
-            WHERE q.status = 'open' GROUP BY q.id ORDER BY q.created_at DESC"""
-    ).fetchall()
+    open_reqs = []
+    if auth.has_role("manager"):
+        open_reqs = conn.execute(
+            """SELECT q.*, COUNT(a.id) applicants FROM reqs q
+                 LEFT JOIN applications a ON a.req_id = q.id AND a.org_id = q.org_id
+                WHERE q.org_id = ? AND q.status = 'open'
+                GROUP BY q.id ORDER BY q.created_at DESC""",
+            (org_id,),
+        ).fetchall()
     conn.close()
     return render_template("dashboard.html", org=org, funnel=funnel, peak=peak,
-                           teams=teams, lapsed=lapsed, open_reqs=open_reqs, scoped=bool(scope_id))
+                           teams=teams, lapsed=lapsed, open_reqs=open_reqs,
+                           scoped=bool(manager_id))
 
 
 @app.route("/org")
+@auth.login_required
 def org_view():
     conn = get_connection()
-    me, scope_id = _scope(conn)
-    org = evaluate_org(conn, manager_id=scope_id)
+    org_id = auth.current_org_id()
+    manager_id, rep_ids = _scope(conn)
+    org = evaluate_org(conn, org_id, manager_id=manager_id, rep_ids=rep_ids)
     sort = request.args.get("sort", "score")
     keys = {
         "score": lambda e: e["score"],
@@ -220,32 +500,35 @@ def org_view():
 
 
 @app.route("/rep/<int:rep_id>")
+@auth.login_required
 def rep_detail(rep_id):
     conn = get_connection()
-    rep = conn.execute("SELECT * FROM reps WHERE id = ?", (rep_id,)).fetchone()
-    if rep is None:
-        conn.close()
-        abort(404)
+    org_id = auth.current_org_id()
+    rep = auth.scoped_one(conn, "reps", rep_id)
+    auth.require_rep_visible(conn, rep_id)
 
     ev = evaluate_rep(conn, rep)
-    courses = recommended_courses(conn, ev["signals"])
-    manager = conn.execute("SELECT * FROM reps WHERE id = ?", (rep["manager_id"],)).fetchone() \
-        if rep["manager_id"] else None
+    courses = recommended_courses(conn, org_id, ev["signals"])
+    manager = None
+    if rep["manager_id"]:
+        manager = conn.execute("SELECT * FROM reps WHERE id = ? AND org_id = ?",
+                               (rep["manager_id"], org_id)).fetchone()
     certs = conn.execute(
         """SELECT c.*, t.name track_name, t.is_mandatory, t.valid_months
-             FROM certifications c JOIN cert_tracks t ON t.id = c.track_id
-            WHERE c.rep_id = ? ORDER BY t.is_mandatory DESC, t.name""",
-        (rep_id,),
+             FROM certifications c JOIN cert_tracks t ON t.id = c.track_id AND t.org_id = c.org_id
+            WHERE c.org_id = ? AND c.rep_id = ? ORDER BY t.is_mandatory DESC, t.name""",
+        (org_id, rep_id),
     ).fetchall()
     enrollments = conn.execute(
         """SELECT e.*, co.code, co.title, co.category, co.hours
-             FROM enrollments e JOIN courses co ON co.id = e.course_id
-            WHERE e.rep_id = ? ORDER BY e.status, co.code""",
-        (rep_id,),
+             FROM enrollments e JOIN courses co ON co.id = e.course_id AND co.org_id = e.org_id
+            WHERE e.org_id = ? AND e.rep_id = ? ORDER BY e.status, co.code""",
+        (org_id, rep_id),
     ).fetchall()
     weeks = conn.execute(
-        "SELECT * FROM activities WHERE rep_id = ? ORDER BY week_start DESC LIMIT 8",
-        (rep_id,),
+        "SELECT * FROM activities WHERE org_id = ? AND rep_id = ? "
+        "ORDER BY week_start DESC LIMIT 8",
+        (org_id, rep_id),
     ).fetchall()
     peak_week = max((w["meetings"] + w["demos"] for w in weeks), default=1) or 1
     conn.close()
@@ -255,67 +538,94 @@ def rep_detail(rep_id):
 
 
 @app.route("/rep/<int:rep_id>/assign/<int:course_id>", methods=["POST"])
+@auth.role_required("manager")
 def assign_course(rep_id, course_id):
     """Assign remediation training straight off a health signal."""
     conn = get_connection()
-    reason = request.form.get("reason", "Assigned from health signal")
+    org_id = auth.current_org_id()
+    rep = auth.scoped_one(conn, "reps", rep_id)
+    course = auth.scoped_one(conn, "courses", course_id)
+    auth.require_rep_visible(conn, rep_id)
+
     conn.execute(
         """INSERT OR IGNORE INTO enrollments
-           (rep_id, course_id, status, assigned_on, assigned_reason)
-           VALUES (?,?,?,?,?)""",
-        (rep_id, course_id, "not_started", date.today().isoformat(), reason),
+           (org_id, rep_id, course_id, status, assigned_on, assigned_reason)
+           VALUES (?,?,?,?,?,?)""",
+        (org_id, rep_id, course_id, "not_started", date.today().isoformat(),
+         request.form.get("reason", "Assigned from health signal")),
     )
+    auth.audit(conn, "training.assign", entity=f"rep:{rep_id}",
+               detail={"course": course["code"]})
     conn.commit()
-    course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
-    rep = conn.execute("SELECT * FROM reps WHERE id = ?", (rep_id,)).fetchone()
     conn.close()
     flash(f"Assigned {course['code']} — {course['title']} to {rep['name']}.")
     return redirect(url_for("rep_detail", rep_id=rep_id))
 
 
 @app.route("/pipeline")
+@auth.login_required
 def pipeline():
     conn = get_connection()
-    me, scope_id = _scope(conn)
-    where, params = "WHERE d.stage NOT IN ('closed_won','closed_lost')", []
-    if scope_id:
+    org_id = auth.current_org_id()
+    manager_id, rep_ids = _scope(conn)
+
+    where = "WHERE d.org_id = ? AND d.stage NOT IN ('closed_won','closed_lost')"
+    params = [org_id]
+    if manager_id:
         where += " AND r.manager_id = ?"
-        params.append(scope_id)
-    if request.args.get("rep"):
-        where += " AND r.id = ?"
+        params.append(manager_id)
+    if rep_ids is not None:
+        if not rep_ids:
+            conn.close()
+            return render_template("pipeline.html", deals=[], reps=[],
+                                   q_end=quarter_bounds()[1], selected="",
+                                   quarter=quarter_label())
+        where += f" AND d.rep_id IN ({','.join('?' * len(rep_ids))})"
+        params.extend(rep_ids)
+    if request.args.get("rep", "").isdigit():
+        where += " AND d.rep_id = ?"
         params.append(int(request.args["rep"]))
+
     deals = conn.execute(
         f"""SELECT d.*, r.name rep_name, r.id rep_id, r.segment
-              FROM deals d JOIN reps r ON r.id = d.rep_id {where}
-             ORDER BY d.close_date""",
+              FROM deals d JOIN reps r ON r.id = d.rep_id AND r.org_id = d.org_id
+              {where} ORDER BY d.close_date""",
         tuple(params),
     ).fetchall()
-    reps = conn.execute(
-        "SELECT * FROM reps WHERE role = 'rep' AND status='active'"
-        + (" AND manager_id = ?" if scope_id else "") + " ORDER BY name",
-        (scope_id,) if scope_id else (),
-    ).fetchall()
+
+    rep_where = "WHERE org_id = ? AND role = 'rep' AND status = 'active'"
+    rep_params = [org_id]
+    if rep_ids is not None:
+        rep_where += f" AND id IN ({','.join('?' * len(rep_ids))})"
+        rep_params.extend(rep_ids)
+    reps = conn.execute(f"SELECT * FROM reps {rep_where} ORDER BY name",
+                        tuple(rep_params)).fetchall()
     _, q_end, _ = quarter_bounds()
     conn.close()
     return render_template("pipeline.html", deals=deals, reps=reps, q_end=q_end,
-                           selected=request.args.get("rep", ""),
-                           quarter=quarter_label())
+                           selected=request.args.get("rep", ""), quarter=quarter_label())
 
 
-# --------------------------------------------------------------- training ---
+# --------------------------------------------------------------- training --
 
 @app.route("/training")
+@auth.login_required
 def training():
     conn = get_connection()
-    courses = conn.execute("SELECT * FROM courses ORDER BY category, code").fetchall()
+    org_id = auth.current_org_id()
+    courses = conn.execute(
+        "SELECT * FROM courses WHERE org_id = ? ORDER BY category, code", (org_id,)
+    ).fetchall()
     tracks = conn.execute(
-        "SELECT * FROM cert_tracks ORDER BY is_mandatory DESC, name"
+        "SELECT * FROM cert_tracks WHERE org_id = ? ORDER BY is_mandatory DESC, name",
+        (org_id,),
     ).fetchall()
 
-    # Per-track compliance: how many active reps hold it, how many have lapsed.
     headcount = conn.execute(
-        "SELECT COUNT(*) n FROM reps WHERE role = 'rep' AND status = 'active'"
+        "SELECT COUNT(*) n FROM reps WHERE org_id = ? AND role = 'rep' AND status = 'active'",
+        (org_id,),
     ).fetchone()["n"]
+
     track_rows = []
     for t in tracks:
         # A track scoped to one segment is measured against that segment only.
@@ -325,8 +635,8 @@ def training():
             eligible = headcount
         else:
             eligible = conn.execute(
-                "SELECT COUNT(*) n FROM reps WHERE role = 'rep' AND status = 'active' "
-                "AND segment = ?", (t["required_for"],),
+                "SELECT COUNT(*) n FROM reps WHERE org_id = ? AND role = 'rep' "
+                "AND status = 'active' AND segment = ?", (org_id, t["required_for"]),
             ).fetchone()["n"]
 
         stats = conn.execute(
@@ -334,15 +644,17 @@ def training():
                  SUM(CASE WHEN c.status='certified'   THEN 1 ELSE 0 END) certified,
                  SUM(CASE WHEN c.status='expired'     THEN 1 ELSE 0 END) expired,
                  SUM(CASE WHEN c.status='in_progress' THEN 1 ELSE 0 END) in_progress
-               FROM certifications c JOIN reps r ON r.id = c.rep_id
-              WHERE c.track_id = ? AND r.role = 'rep' AND r.status = 'active'""",
-            (t["id"],),
+               FROM certifications c JOIN reps r ON r.id = c.rep_id AND r.org_id = c.org_id
+              WHERE c.org_id = ? AND c.track_id = ? AND r.role = 'rep'
+                AND r.status = 'active'""",
+            (org_id, t["id"]),
         ).fetchone()
         certified = stats["certified"] or 0
         courses_in = conn.execute(
-            """SELECT co.* FROM track_courses tc JOIN courses co ON co.id = tc.course_id
-                WHERE tc.track_id = ? ORDER BY tc.sequence""",
-            (t["id"],),
+            """SELECT co.* FROM track_courses tc
+                 JOIN courses co ON co.id = tc.course_id AND co.org_id = tc.org_id
+                WHERE tc.org_id = ? AND tc.track_id = ? ORDER BY tc.sequence""",
+            (org_id, t["id"]),
         ).fetchall()
         track_rows.append({
             "track": t, "courses": courses_in,
@@ -357,61 +669,82 @@ def training():
 
     sessions = conn.execute(
         """SELECT s.*, co.code, co.title, co.category,
-                  (SELECT COUNT(*) FROM session_signups g WHERE g.session_id = s.id) taken
-             FROM class_sessions s JOIN courses co ON co.id = s.course_id
-            WHERE s.starts_at >= ? ORDER BY s.starts_at LIMIT 12""",
-        (date.today().isoformat(),),
+                  (SELECT COUNT(*) FROM session_signups g
+                    WHERE g.session_id = s.id AND g.org_id = s.org_id) taken
+             FROM class_sessions s JOIN courses co ON co.id = s.course_id AND co.org_id = s.org_id
+            WHERE s.org_id = ? AND s.starts_at >= ? ORDER BY s.starts_at LIMIT 12""",
+        (org_id, date.today().isoformat()),
     ).fetchall()
 
-    # Everything expiring or already lapsed in the next 60 days, org-wide.
     horizon = (date.today() + timedelta(days=60)).isoformat()
     renewals = conn.execute(
         """SELECT c.*, r.name rep_name, r.id rep_id, r.team, t.name track_name, t.is_mandatory
              FROM certifications c
-             JOIN reps r ON r.id = c.rep_id JOIN cert_tracks t ON t.id = c.track_id
-            WHERE r.status = 'active'
+             JOIN reps r ON r.id = c.rep_id AND r.org_id = c.org_id
+             JOIN cert_tracks t ON t.id = c.track_id AND t.org_id = c.org_id
+            WHERE c.org_id = ? AND r.status = 'active'
               AND (c.status = 'expired' OR (c.expires_on IS NOT NULL AND c.expires_on <= ?))
             ORDER BY c.expires_on""",
-        (horizon,),
+        (org_id, horizon),
+    ).fetchall()
+
+    _, rep_ids = _scope(conn)
+    if rep_ids is not None:
+        renewals = [r for r in renewals if r["rep_id"] in rep_ids]
+    reps = conn.execute(
+        "SELECT id, name FROM reps WHERE org_id = ? AND status = 'active' ORDER BY name",
+        (org_id,),
     ).fetchall()
     conn.close()
     return render_template("training.html", courses=courses, track_rows=track_rows,
-                           sessions=sessions, renewals=renewals, headcount=headcount)
+                           sessions=sessions, renewals=renewals, headcount=headcount,
+                           reps=reps)
 
 
 @app.route("/session/<int:session_id>/signup", methods=["POST"])
+@auth.role_required("manager")
 def session_signup(session_id):
-    rep_id = int(request.form["rep_id"])
     conn = get_connection()
+    org_id = auth.current_org_id()
+    auth.scoped_one(conn, "class_sessions", session_id)
+    rep_id = int(request.form["rep_id"])
+    rep = auth.scoped_one(conn, "reps", rep_id)
     conn.execute(
-        "INSERT OR IGNORE INTO session_signups (session_id, rep_id, signed_up_on) VALUES (?,?,?)",
-        (session_id, rep_id, date.today().isoformat()),
+        "INSERT OR IGNORE INTO session_signups (org_id, session_id, rep_id, signed_up_on) "
+        "VALUES (?,?,?,?)",
+        (org_id, session_id, rep_id, date.today().isoformat()),
     )
     conn.commit()
-    rep = conn.execute("SELECT name FROM reps WHERE id = ?", (rep_id,)).fetchone()
     conn.close()
     flash(f"{rep['name']} is booked into the session.")
     return redirect(url_for("training"))
 
 
-# ----------------------------------------------------------------- hiring ---
+# ----------------------------------------------------------------- hiring --
 
 @app.route("/hiring")
+@auth.role_required("manager")
 def hiring():
     conn = get_connection()
+    org_id = auth.current_org_id()
     reqs = conn.execute(
         """SELECT q.*, r.name manager_name, COUNT(a.id) applicants,
                   SUM(CASE WHEN a.stage NOT IN ('rejected','hired') THEN 1 ELSE 0 END) active
-             FROM reqs q LEFT JOIN reps r ON r.id = q.hiring_manager_id
-             LEFT JOIN applications a ON a.req_id = q.id
-            GROUP BY q.id ORDER BY q.status, q.created_at DESC"""
+             FROM reqs q
+             LEFT JOIN reps r ON r.id = q.hiring_manager_id AND r.org_id = q.org_id
+             LEFT JOIN applications a ON a.req_id = q.id AND a.org_id = q.org_id
+            WHERE q.org_id = ? GROUP BY q.id ORDER BY q.status, q.created_at DESC""",
+        (org_id,),
     ).fetchall()
     board = {s: [] for s in STAGES}
     board["rejected"] = []
     rows = conn.execute(
         """SELECT a.*, c.name cand_name, c.current_title, c.years_exp, q.title req_title
-             FROM applications a JOIN candidates c ON c.id = a.candidate_id
-             JOIN reqs q ON q.id = a.req_id ORDER BY a.match_score DESC"""
+             FROM applications a
+             JOIN candidates c ON c.id = a.candidate_id AND c.org_id = a.org_id
+             JOIN reqs q ON q.id = a.req_id AND q.org_id = a.org_id
+            WHERE a.org_id = ? ORDER BY a.match_score DESC""",
+        (org_id,),
     ).fetchall()
     for r in rows:
         board.setdefault(r["stage"], []).append(r)
@@ -420,21 +753,37 @@ def hiring():
 
 
 @app.route("/req/new", methods=["GET", "POST"])
+@auth.role_required("manager")
 def req_new():
     conn = get_connection()
+    org_id = auth.current_org_id()
     managers = conn.execute(
-        "SELECT * FROM reps WHERE role IN ('manager','vp') ORDER BY name"
+        "SELECT * FROM reps WHERE org_id = ? AND role IN ('manager','vp') ORDER BY name",
+        (org_id,),
     ).fetchall()
     if request.method == "POST":
         f = request.form
+        hm = f.get("hiring_manager_id") or None
+        if hm and not conn.execute("SELECT 1 FROM reps WHERE id = ? AND org_id = ?",
+                                   (hm, org_id)).fetchone():
+            conn.close()
+            abort(403)
+        try:
+            quota = int(f.get("quota_annual") or 0)
+            base = int(f.get("comp_base") or 0)
+            ote = int(f.get("comp_ote") or 0)
+        except ValueError:
+            conn.close()
+            flash("Quota and compensation must be whole numbers.")
+            return redirect(url_for("req_new"))
+
         req_id = conn.execute(
-            """INSERT INTO reqs (title, level, team, region, segment, quota_annual, comp_base,
-                                 comp_ote, must_haves, nice_haves, hiring_manager_id, status,
-                                 created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (f["title"], f["level"], f["team"], f["region"], f["segment"],
-             int(f["quota_annual"] or 0), int(f["comp_base"] or 0), int(f["comp_ote"] or 0),
-             f["must_haves"], f["nice_haves"], int(f["hiring_manager_id"]),
+            """INSERT INTO reqs (org_id, title, level, team, region, segment, quota_annual,
+                                 comp_base, comp_ote, must_haves, nice_haves,
+                                 hiring_manager_id, status, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, f["title"], f["level"], f["team"], f["region"], f["segment"],
+             quota, base, ote, f["must_haves"], f.get("nice_haves", ""), hm,
              "draft", date.today().isoformat()),
         ).lastrowid
         conn.commit()
@@ -446,42 +795,54 @@ def req_new():
 
 
 @app.route("/req/<int:req_id>")
+@auth.role_required("manager")
 def req_detail(req_id):
     conn = get_connection()
-    req = conn.execute("SELECT * FROM reqs WHERE id = ?", (req_id,)).fetchone()
-    if req is None:
-        conn.close()
-        abort(404)
-    manager = conn.execute(
-        "SELECT * FROM reps WHERE id = ?", (req["hiring_manager_id"],)
-    ).fetchone() if req["hiring_manager_id"] else None
+    org_id = auth.current_org_id()
+    req = auth.scoped_one(conn, "reqs", req_id)
+    manager = None
+    if req["hiring_manager_id"]:
+        manager = conn.execute("SELECT * FROM reps WHERE id = ? AND org_id = ?",
+                               (req["hiring_manager_id"], org_id)).fetchone()
     apps = conn.execute(
         """SELECT a.*, c.name cand_name, c.current_title, c.current_company, c.years_exp,
-                  (SELECT COUNT(*) FROM interviews i WHERE i.application_id = a.id) interviews
-             FROM applications a JOIN candidates c ON c.id = a.candidate_id
-            WHERE a.req_id = ? ORDER BY
+                  (SELECT COUNT(*) FROM interviews i
+                    WHERE i.application_id = a.id AND i.org_id = a.org_id) interviews
+             FROM applications a
+             JOIN candidates c ON c.id = a.candidate_id AND c.org_id = a.org_id
+            WHERE a.org_id = ? AND a.req_id = ? ORDER BY
               CASE a.stage WHEN 'hired' THEN 0 WHEN 'offer' THEN 1 WHEN 'panel' THEN 2
                            WHEN 'ai_interview' THEN 3 WHEN 'screened' THEN 4
                            WHEN 'sourced' THEN 5 ELSE 6 END, a.match_score DESC""",
-        (req_id,),
+        (org_id, req_id),
     ).fetchall()
     conn.close()
     return render_template("req.html", req=req, manager=manager, apps=apps)
 
 
 @app.route("/req/<int:req_id>/posting", methods=["POST"])
+@auth.role_required("manager")
 def req_posting(req_id):
     """AI job posting generation."""
     conn = get_connection()
-    req = conn.execute("SELECT * FROM reqs WHERE id = ?", (req_id,)).fetchone()
-    if req is None:
+    org_id = auth.current_org_id()
+    req = auth.scoped_one(conn, "reqs", req_id)
+    ok, why = ai_budget_check(conn, org_id, g.user["ai_cents_cap"])
+    if not ok:
         conn.close()
-        abort(404)
-    markdown, engine = ai_engine.write_posting(req)
+        flash(why)
+        return redirect(url_for("req_detail", req_id=req_id))
+
+    markdown_text, engine = ai_engine.write_posting(req)
+    spent = ai_budget_record(conn, org_id)
     conn.execute(
-        "UPDATE reqs SET posting_md = ?, posting_source = ?, status = ? WHERE id = ?",
-        (markdown, engine, "open" if req["status"] == "draft" else req["status"], req_id),
+        "UPDATE reqs SET posting_md = ?, posting_source = ?, status = ? "
+        "WHERE id = ? AND org_id = ?",
+        (markdown_text, engine, "open" if req["status"] == "draft" else req["status"],
+         req_id, org_id),
     )
+    auth.audit(conn, "ai.posting", entity=f"req:{req_id}", engine=engine,
+               detail={"title": req["title"], "cents": round(spent, 4)})
     conn.commit()
     conn.close()
     flash(f"Posting written by {'Claude' if engine == 'claude' else 'the offline engine'}.")
@@ -489,61 +850,85 @@ def req_posting(req_id):
 
 
 @app.route("/search", methods=["GET", "POST"])
+@auth.role_required("manager")
 def search():
     """AI resume search over the candidate pool."""
     conn = get_connection()
-    reqs = conn.execute("SELECT * FROM reqs ORDER BY title").fetchall()
+    org_id = auth.current_org_id()
+    reqs = conn.execute("SELECT * FROM reqs WHERE org_id = ? ORDER BY title",
+                        (org_id,)).fetchall()
     results, query, engine, req = [], "", None, None
 
     if request.method == "POST":
-        query = request.form.get("query", "").strip()
+        query = request.form.get("query", "").strip()[:2000]
         req_id = request.form.get("req_id")
-        req = conn.execute("SELECT * FROM reqs WHERE id = ?", (req_id,)).fetchone() \
-            if req_id else None
-        candidates = conn.execute("SELECT * FROM candidates ORDER BY name").fetchall()
-        if query:
+        if req_id:
+            req = auth.scoped_one(conn, "reqs", int(req_id))
+        if not query:
+            flash("Describe who you're looking for, in your own words.")
+        elif not ai_budget_check(conn, org_id, g.user["ai_cents_cap"])[0]:
+            flash(ai_budget_check(conn, org_id, g.user["ai_cents_cap"])[1])
+        else:
+            # Bounded so one enormous pool can't produce one enormous prompt.
+            candidates = conn.execute(
+                "SELECT * FROM candidates WHERE org_id = ? ORDER BY created_at DESC LIMIT ?",
+                (org_id, Config.AI_SEARCH_MAX_CANDIDATES),
+            ).fetchall()
             ranked, engine = ai_engine.search_resumes(query, candidates, req)
+            spent = ai_budget_record(conn, org_id)
+            auth.audit(conn, "ai.search", engine=engine,
+                       detail={"query": query, "pool": len(candidates),
+                               "req_id": req["id"] if req else None,
+                               "cents": round(spent, 4)})
             by_id = {c["id"]: c for c in candidates}
             for r in ranked:
                 cand = by_id.get(r["candidate_id"])
                 if not cand:
                     continue
-                existing = conn.execute(
-                    "SELECT * FROM applications WHERE candidate_id = ? AND req_id = ?",
-                    (cand["id"], req["id"] if req else -1),
-                ).fetchone() if req else None
+                existing = None
+                if req:
+                    existing = conn.execute(
+                        "SELECT * FROM applications WHERE org_id = ? AND candidate_id = ? "
+                        "AND req_id = ?", (org_id, cand["id"], req["id"]),
+                    ).fetchone()
                 results.append({"c": cand, "r": r, "app": existing})
-        else:
-            flash("Describe who you're looking for, in your own words.")
     conn.close()
     return render_template("search.html", reqs=reqs, results=results, query=query,
                            engine=engine, req=req)
 
 
 @app.route("/req/<int:req_id>/add/<int:candidate_id>", methods=["POST"])
+@auth.role_required("manager")
 def add_candidate(req_id, candidate_id):
     """Move a search hit into the funnel."""
     conn = get_connection()
+    org_id = auth.current_org_id()
+    auth.scoped_one(conn, "reqs", req_id)
+    auth.scoped_one(conn, "candidates", candidate_id)
     now = date.today().isoformat()
     existing = conn.execute(
-        "SELECT * FROM applications WHERE req_id = ? AND candidate_id = ?",
-        (req_id, candidate_id),
+        "SELECT * FROM applications WHERE org_id = ? AND req_id = ? AND candidate_id = ?",
+        (org_id, req_id, candidate_id),
     ).fetchone()
     if existing:
         conn.close()
         flash("That candidate is already in this funnel.")
         return redirect(url_for("req_detail", req_id=req_id))
+
+    score = request.form.get("score")
     aid = conn.execute(
-        """INSERT INTO applications (req_id, candidate_id, stage, match_score, match_reason,
-                                     created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
-        (req_id, candidate_id, "sourced", request.form.get("score") or None,
+        """INSERT INTO applications (org_id, req_id, candidate_id, stage, match_score,
+                                     match_reason, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (org_id, req_id, candidate_id, "sourced",
+         int(score) if (score or "").isdigit() else None,
          request.form.get("reason") or None, now, now),
     ).lastrowid
     conn.execute(
-        "INSERT INTO stage_events (application_id, from_stage, to_stage, note, created_at) "
-        "VALUES (?,?,?,?,?)",
-        (aid, None, "sourced", "Added from AI resume search", now),
+        """INSERT INTO stage_events (org_id, application_id, from_stage, to_stage, note,
+                                     actor_user_id, created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (org_id, aid, None, "sourced", "Added from AI resume search", g.user["id"], now),
     )
     conn.commit()
     conn.close()
@@ -552,68 +937,80 @@ def add_candidate(req_id, candidate_id):
 
 
 @app.route("/candidates")
+@auth.role_required("manager")
 def candidates():
     conn = get_connection()
     rows = conn.execute(
         """SELECT c.*, COUNT(a.id) apps FROM candidates c
-             LEFT JOIN applications a ON a.candidate_id = c.id
-            GROUP BY c.id ORDER BY c.created_at DESC"""
+             LEFT JOIN applications a ON a.candidate_id = c.id AND a.org_id = c.org_id
+            WHERE c.org_id = ? GROUP BY c.id ORDER BY c.created_at DESC""",
+        (auth.current_org_id(),),
     ).fetchall()
     conn.close()
-    return render_template("candidates.html", candidates=rows)
+    return render_template("candidates.html", candidates=rows,
+                           retention_days=Config.CANDIDATE_RETENTION_DAYS)
 
 
 @app.route("/application/<int:app_id>")
+@auth.role_required("manager")
 def application_detail(app_id):
     conn = get_connection()
+    org_id = auth.current_org_id()
+    auth.scoped_one(conn, "applications", app_id)
     row = conn.execute(
         """SELECT a.*, c.name cand_name, c.email, c.phone, c.location, c.years_exp,
                   c.current_title, c.current_company, c.resume_text, c.source,
                   q.title req_title, q.id req_id
-             FROM applications a JOIN candidates c ON c.id = a.candidate_id
-             JOIN reqs q ON q.id = a.req_id WHERE a.id = ?""",
-        (app_id,),
+             FROM applications a
+             JOIN candidates c ON c.id = a.candidate_id AND c.org_id = a.org_id
+             JOIN reqs q ON q.id = a.req_id AND q.org_id = a.org_id
+            WHERE a.org_id = ? AND a.id = ?""",
+        (org_id, app_id),
     ).fetchone()
-    if row is None:
-        conn.close()
-        abort(404)
-    req = conn.execute("SELECT * FROM reqs WHERE id = ?", (row["req_id"],)).fetchone()
+    req = conn.execute("SELECT * FROM reqs WHERE id = ? AND org_id = ?",
+                       (row["req_id"], org_id)).fetchone()
     interviews = conn.execute(
-        "SELECT * FROM interviews WHERE application_id = ? ORDER BY created_at DESC", (app_id,)
+        "SELECT * FROM interviews WHERE org_id = ? AND application_id = ? "
+        "ORDER BY created_at DESC", (org_id, app_id),
     ).fetchall()
     events = conn.execute(
-        "SELECT * FROM stage_events WHERE application_id = ? ORDER BY created_at", (app_id,)
+        """SELECT s.*, u.name actor_name FROM stage_events s
+             LEFT JOIN users u ON u.id = s.actor_user_id AND u.org_id = s.org_id
+            WHERE s.org_id = ? AND s.application_id = ? ORDER BY s.created_at, s.id""",
+        (org_id, app_id),
     ).fetchall()
-    parsed = []
-    for i in interviews:
-        parsed.append({
-            "row": i,
-            "questions": json.loads(i["questions_json"]),
-            "scores": json.loads(i["scores_json"]) if i["scores_json"] else None,
-            "answers": json.loads(i["answers_json"]) if i["answers_json"] else {},
-        })
+    parsed = [{
+        "row": i,
+        "questions": json.loads(i["questions_json"]),
+        "scores": json.loads(i["scores_json"]) if i["scores_json"] else None,
+        "answers": json.loads(i["answers_json"]) if i["answers_json"] else {},
+    } for i in interviews]
     conn.close()
-    return render_template("application.html", a=row, req=req, interviews=parsed, events=events,
-                           kinds=ai_engine.INTERVIEW_KINDS)
+    return render_template("application.html", a=row, req=req, interviews=parsed,
+                           events=events, kinds=ai_engine.INTERVIEW_KINDS)
 
 
 @app.route("/application/<int:app_id>/stage", methods=["POST"])
+@auth.role_required("manager")
 def move_stage(app_id):
     to_stage = request.form["to_stage"]
-    note = request.form.get("note", "")
+    if to_stage not in STAGE_LABELS:
+        abort(400, description="Unknown stage.")
     conn = get_connection()
-    a = conn.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
-    if a is None:
-        conn.close()
-        abort(404)
+    org_id = auth.current_org_id()
+    a = auth.scoped_one(conn, "applications", app_id)
     now = date.today().isoformat()
-    conn.execute("UPDATE applications SET stage = ?, updated_at = ? WHERE id = ?",
-                 (to_stage, now, app_id))
+    conn.execute("UPDATE applications SET stage = ?, updated_at = ? WHERE id = ? AND org_id = ?",
+                 (to_stage, now, app_id, org_id))
     conn.execute(
-        "INSERT INTO stage_events (application_id, from_stage, to_stage, note, created_at) "
-        "VALUES (?,?,?,?,?)",
-        (app_id, a["stage"], to_stage, note, now),
+        """INSERT INTO stage_events (org_id, application_id, from_stage, to_stage, note,
+                                     actor_user_id, created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (org_id, app_id, a["stage"], to_stage, request.form.get("note", ""),
+         g.user["id"], now),
     )
+    auth.audit(conn, "stage.move", entity=f"application:{app_id}",
+               detail={"from": a["stage"], "to": to_stage})
     conn.commit()
     conn.close()
     flash(f"Moved to {STAGE_LABELS.get(to_stage, to_stage)}.")
@@ -623,33 +1020,44 @@ def move_stage(app_id):
 
 
 @app.route("/application/<int:app_id>/interview/new", methods=["POST"])
+@auth.role_required("manager")
 def interview_new(app_id):
     """AI interview generation — questions plus the rubric they'll be scored on."""
     kind = request.form.get("kind", "screen")
+    if kind not in ai_engine.INTERVIEW_KINDS:
+        abort(400, description="Unknown interview type.")
     conn = get_connection()
-    a = conn.execute(
-        "SELECT a.*, q.id req_id FROM applications a JOIN reqs q ON q.id = a.req_id "
-        "WHERE a.id = ?", (app_id,)
-    ).fetchone()
-    if a is None:
+    org_id = auth.current_org_id()
+    a = auth.scoped_one(conn, "applications", app_id)
+    ok, why = ai_budget_check(conn, org_id, g.user["ai_cents_cap"])
+    if not ok:
         conn.close()
-        abort(404)
-    req = conn.execute("SELECT * FROM reqs WHERE id = ?", (a["req_id"],)).fetchone()
+        flash(why)
+        return redirect(url_for("application_detail", app_id=app_id))
+
+    req = conn.execute("SELECT * FROM reqs WHERE id = ? AND org_id = ?",
+                       (a["req_id"], org_id)).fetchone()
     questions, engine = ai_engine.build_interview(req, kind)
+    spent = ai_budget_record(conn, org_id)
     iid = conn.execute(
-        """INSERT INTO interviews (application_id, kind, questions_json, engine, created_at)
-           VALUES (?,?,?,?,?)""",
-        (app_id, kind, json.dumps(questions), engine, date.today().isoformat()),
+        """INSERT INTO interviews (org_id, application_id, kind, questions_json, engine,
+                                   model, created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (org_id, app_id, kind, json.dumps(questions), engine,
+         ai_engine.MODEL if engine == "claude" else None, date.today().isoformat()),
     ).lastrowid
     if a["stage"] in ("sourced", "screened"):
-        conn.execute("UPDATE applications SET stage = 'ai_interview', updated_at = ? WHERE id = ?",
-                     (date.today().isoformat(), app_id))
         conn.execute(
-            "INSERT INTO stage_events (application_id, from_stage, to_stage, note, created_at) "
-            "VALUES (?,?,?,?,?)",
-            (app_id, a["stage"], "ai_interview", f"{kind} interview generated",
-             date.today().isoformat()),
-        )
+            "UPDATE applications SET stage = 'ai_interview', updated_at = ? "
+            "WHERE id = ? AND org_id = ?", (date.today().isoformat(), app_id, org_id))
+        conn.execute(
+            """INSERT INTO stage_events (org_id, application_id, from_stage, to_stage, note,
+                                         actor_user_id, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (org_id, app_id, a["stage"], "ai_interview", f"{kind} interview generated",
+             g.user["id"], date.today().isoformat()))
+    auth.audit(conn, "ai.interview", entity=f"application:{app_id}", engine=engine,
+               detail={"kind": kind, "questions": len(questions), "cents": round(spent, 4)})
     conn.commit()
     conn.close()
     flash(f"Interview generated by {'Claude' if engine == 'claude' else 'the offline engine'}.")
@@ -657,34 +1065,51 @@ def interview_new(app_id):
 
 
 @app.route("/interview/<int:interview_id>", methods=["GET", "POST"])
+@auth.role_required("manager")
 def interview_run(interview_id):
     """Conduct the interview, then score every answer against the rubric."""
     conn = get_connection()
-    iv = conn.execute("SELECT * FROM interviews WHERE id = ?", (interview_id,)).fetchone()
-    if iv is None:
-        conn.close()
-        abort(404)
+    org_id = auth.current_org_id()
+    iv = auth.scoped_one(conn, "interviews", interview_id)
     a = conn.execute(
         """SELECT a.*, c.name cand_name, q.title req_title, q.id req_id
-             FROM applications a JOIN candidates c ON c.id = a.candidate_id
-             JOIN reqs q ON q.id = a.req_id WHERE a.id = ?""",
-        (iv["application_id"],),
+             FROM applications a
+             JOIN candidates c ON c.id = a.candidate_id AND c.org_id = a.org_id
+             JOIN reqs q ON q.id = a.req_id AND q.org_id = a.org_id
+            WHERE a.org_id = ? AND a.id = ?""",
+        (org_id, iv["application_id"]),
     ).fetchone()
-    req = conn.execute("SELECT * FROM reqs WHERE id = ?", (a["req_id"],)).fetchone()
+    req = conn.execute("SELECT * FROM reqs WHERE id = ? AND org_id = ?",
+                       (a["req_id"], org_id)).fetchone()
     questions = json.loads(iv["questions_json"])
 
     if request.method == "POST":
-        answers = {str(q["id"]): request.form.get(f"answer_{q['id']}", "").strip()
+        ok, why = ai_budget_check(conn, org_id, g.user["ai_cents_cap"])
+        if not ok:
+            conn.close()
+            flash(why)
+            return redirect(url_for("interview_run", interview_id=interview_id))
+        answers = {str(q["id"]): request.form.get(f"answer_{q['id']}", "").strip()[:8000]
                    for q in questions}
         result, engine = ai_engine.score_interview(req, questions, answers)
+        spent = ai_budget_record(conn, org_id)
         conn.execute(
             """UPDATE interviews SET answers_json = ?, scores_json = ?, overall_score = ?,
-                      recommendation = ?, summary = ?, engine = ?, completed_at = ?
-                WHERE id = ?""",
+                      recommendation = ?, summary = ?, engine = ?, model = ?, completed_at = ?
+                WHERE id = ? AND org_id = ?""",
             (json.dumps(answers), json.dumps(result), result["overall_score"],
              result["recommendation"], result["summary"], engine,
-             date.today().isoformat(), interview_id),
+             ai_engine.MODEL if engine == "claude" else None,
+             date.today().isoformat(), interview_id, org_id),
         )
+        # The full input and output are recorded, because "the model said 62" is
+        # not a defensible answer to a candidate or a regulator on its own.
+        auth.audit(conn, "ai.score", entity=f"application:{a['id']}", engine=engine,
+                   detail={"interview_id": interview_id,
+                           "overall": result["overall_score"],
+                           "recommendation": result["recommendation"],
+                           "cents": round(spent, 4),
+                           "per_question": result["scores"]})
         conn.commit()
         conn.close()
         flash(f"Scored by {'Claude' if engine == 'claude' else 'the offline engine'} — "
@@ -699,6 +1124,7 @@ def interview_run(interview_id):
 
 
 @app.route("/application/<int:app_id>/onboard", methods=["GET", "POST"])
+@auth.role_required("manager")
 def onboard(app_id):
     """
     The join that makes this one product instead of three.
@@ -709,16 +1135,17 @@ def onboard(app_id):
     unexplained zero.
     """
     conn = get_connection()
+    org_id = auth.current_org_id()
+    auth.scoped_one(conn, "applications", app_id)
     a = conn.execute(
         """SELECT a.*, c.name cand_name, c.email, q.title req_title, q.team, q.region,
                   q.segment, q.quota_annual, q.level, q.hiring_manager_id
-             FROM applications a JOIN candidates c ON c.id = a.candidate_id
-             JOIN reqs q ON q.id = a.req_id WHERE a.id = ?""",
-        (app_id,),
+             FROM applications a
+             JOIN candidates c ON c.id = a.candidate_id AND c.org_id = a.org_id
+             JOIN reqs q ON q.id = a.req_id AND q.org_id = a.org_id
+            WHERE a.org_id = ? AND a.id = ?""",
+        (org_id, app_id),
     ).fetchone()
-    if a is None:
-        conn.close()
-        abort(404)
     if a["hired_rep_id"]:
         rep_id = a["hired_rep_id"]
         conn.close()
@@ -727,42 +1154,53 @@ def onboard(app_id):
 
     if request.method == "POST":
         start = request.form.get("start_date") or date.today().isoformat()
-        ramp_days = int(request.form.get("ramp_days") or 120)
-        start_d = datetime.strptime(start, "%Y-%m-%d").date()
+        try:
+            start_d = datetime.strptime(start, "%Y-%m-%d").date()
+            ramp_days = max(0, min(int(request.form.get("ramp_days") or 120), 365))
+        except ValueError:
+            conn.close()
+            flash("Start date must be YYYY-MM-DD and ramp must be a number of days.")
+            return redirect(url_for("onboard", app_id=app_id))
+
         rep_id = conn.execute(
-            """INSERT INTO reps (name, email, title, role, manager_id, team, region, segment,
-                                 hire_date, ramp_end_date, quota_annual, notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (a["cand_name"], a["email"], f"Account Executive, {a['segment']}", "rep",
-             a["hiring_manager_id"], a["team"], a["region"], a["segment"], start,
-             (start_d + timedelta(days=ramp_days)).isoformat(), a["quota_annual"],
+            """INSERT INTO reps (org_id, name, email, title, role, manager_id, team, region,
+                                 segment, hire_date, ramp_end_date, quota_annual, notes)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, a["cand_name"], a["email"], f"Account Executive, {a['segment']}",
+             "rep", a["hiring_manager_id"], a["team"], a["region"], a["segment"],
+             start, (start_d + timedelta(days=ramp_days)).isoformat(), a["quota_annual"],
              f"Hired from requisition: {a['req_title']}."),
         ).lastrowid
 
-        # Enroll into every mandatory track and its courses.
-        tracks = conn.execute("SELECT * FROM cert_tracks WHERE is_mandatory = 1").fetchall()
+        tracks = conn.execute(
+            "SELECT * FROM cert_tracks WHERE org_id = ? AND is_mandatory = 1", (org_id,)
+        ).fetchall()
         for t in tracks:
             conn.execute(
-                "INSERT INTO certifications (rep_id, track_id, status) VALUES (?,?,?)",
-                (rep_id, t["id"], "in_progress"))
+                "INSERT INTO certifications (org_id, rep_id, track_id, status) VALUES (?,?,?,?)",
+                (org_id, rep_id, t["id"], "in_progress"))
             for c in conn.execute(
-                "SELECT course_id FROM track_courses WHERE track_id = ? ORDER BY sequence",
-                (t["id"],),
+                "SELECT course_id FROM track_courses WHERE org_id = ? AND track_id = ? "
+                "ORDER BY sequence", (org_id, t["id"]),
             ).fetchall():
                 conn.execute(
                     """INSERT OR IGNORE INTO enrollments
-                       (rep_id, course_id, status, assigned_on, assigned_reason)
-                       VALUES (?,?,?,?,?)""",
-                    (rep_id, c["course_id"], "not_started", start,
+                       (org_id, rep_id, course_id, status, assigned_on, assigned_reason)
+                       VALUES (?,?,?,?,?,?)""",
+                    (org_id, rep_id, c["course_id"], "not_started", start,
                      f"Onboarding — required for {t['name']}"))
 
         conn.execute("UPDATE applications SET hired_rep_id = ?, stage = 'hired', updated_at = ? "
-                     "WHERE id = ?", (rep_id, date.today().isoformat(), app_id))
+                     "WHERE id = ? AND org_id = ?",
+                     (rep_id, date.today().isoformat(), app_id, org_id))
         conn.execute(
-            "INSERT INTO stage_events (application_id, from_stage, to_stage, note, created_at) "
-            "VALUES (?,?,?,?,?)",
-            (app_id, a["stage"], "hired", f"Onboarded with a {ramp_days}-day ramp",
-             date.today().isoformat()))
+            """INSERT INTO stage_events (org_id, application_id, from_stage, to_stage, note,
+                                         actor_user_id, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (org_id, app_id, a["stage"], "hired", f"Onboarded with a {ramp_days}-day ramp",
+             g.user["id"], date.today().isoformat()))
+        auth.audit(conn, "hire", entity=f"application:{app_id}",
+                   detail={"rep_id": rep_id, "ramp_days": ramp_days})
         conn.commit()
         conn.close()
         flash(f"{a['cand_name']} is on the org chart with a {ramp_days}-day ramp and "
@@ -770,7 +1208,8 @@ def onboard(app_id):
         return redirect(url_for("rep_detail", rep_id=rep_id))
 
     tracks = conn.execute(
-        "SELECT * FROM cert_tracks WHERE is_mandatory = 1 ORDER BY name"
+        "SELECT * FROM cert_tracks WHERE org_id = ? AND is_mandatory = 1 ORDER BY name",
+        (org_id,),
     ).fetchall()
     conn.close()
     return render_template("onboard.html", a=a, tracks=tracks,
@@ -781,4 +1220,4 @@ if __name__ == "__main__":
     if not DB_FILE.exists():
         create_tables()
         seed_sample_data()
-    app.run(debug=True, port=5003)
+    app.run(debug=Config.DEBUG, port=5003)

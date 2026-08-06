@@ -11,6 +11,7 @@
 </p>
 
 <form method="post" class="card">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
   <label for="query">Who are you looking for?</label>
   <textarea id="query" name="query" placeholder="e.g. Enterprise closer who's carried $1M+ into healthcare, long cycles with security review, self-sources most of their pipeline">{{ query }}</textarea>
   <label for="req_id">Score against a requisition (optional)</label>
@@ -84,6 +85,7 @@
               Already in funnel — open</a>
           {% else %}
             <form method="post" action="{{ url_for('add_candidate', req_id=req.id, candidate_id=c.id) }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="score" value="{{ r.score }}">
               <input type="hidden" name="reason" value="{{ r.reason }}">
               <button class="btn btn-primary btn-sm">Add to {{ req.title|truncate(28) }}</button>

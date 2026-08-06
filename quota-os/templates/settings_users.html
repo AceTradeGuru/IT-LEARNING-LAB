@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block crumb %}Settings / Users{% endblock %}
+
+{% block content %}
+<h1>Users</h1>
+<p class="sub">
+  Everyone who can sign in to {{ user.org_name }}. Role decides what they see: a
+  <b>member</b> sees only their own rep page, a <b>manager</b> their team plus the
+  hiring funnel, an <b>admin</b> the whole org, and an <b>owner</b> also this page.
+</p>
+
+<div class="grid split">
+  <div class="card pad0">
+    <div class="cardhead"><h2>{{ users|length }} users</h2></div>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Linked seat</th><th>Last sign-in</th></tr></thead>
+      <tbody>
+      {% for u in users %}
+        <tr>
+          <td>
+            <div class="person">
+              <span class="avatar">{{ u.name.split()[0][0] }}{{ u.name.split()[-1][0] }}</span>
+              <span class="nm">{{ u.name }}</span>
+            </div>
+          </td>
+          <td class="tiny">{{ u.email }}</td>
+          <td><span class="badge {{ 'at_risk' if u.role == 'owner' else 'brand' if u.role == 'admin' else 'neutral' }}">{{ u.role }}</span></td>
+          <td class="tiny">
+            {% if u.rep_id %}<a href="{{ url_for('rep_detail', rep_id=u.rep_id) }}">{{ u.rep_name }}</a>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="tiny muted">{{ u.last_login_at[:10]|since if u.last_login_at else 'never' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <form method="post" class="card">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <h3>Add a user</h3>
+    <label for="name">Name</label>
+    <input id="name" name="name" required>
+    <label for="email">Work email</label>
+    <input id="email" name="email" type="email" required>
+    <label for="password">Temporary password</label>
+    <input id="password" name="password" type="password" required minlength="12">
+    <label for="role">Role</label>
+    <select id="role" name="role">
+      {% for r in roles %}<option value="{{ r }}" {{ 'selected' if r == 'member' }}>{{ r }}</option>{% endfor %}
+    </select>
+    <label for="rep_id">Link to a seat (optional)</label>
+    <select id="rep_id" name="rep_id">
+      <option value="">Not linked — no rep data of their own</option>
+      {% for r in reps %}<option value="{{ r.id }}">{{ r.name }} — {{ r.title }}</option>{% endfor %}
+    </select>
+    <p class="tiny muted" style="margin-top:.5rem">
+      A manager must be linked to their own seat, or the team filter has nothing to
+      resolve against and they'll see an empty org.
+    </p>
+    <button class="btn btn-primary" style="margin-top:1rem">Add user</button>
+  </form>
+</div>
+{% endblock %}

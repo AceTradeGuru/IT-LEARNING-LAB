@@ -96,8 +96,10 @@ def rep_metrics(conn, rep, today=None):
     q_start, q_end, pace_pct = quarter_bounds(today)
     rep_id = rep["id"]
 
+    org_id = rep["org_id"]
     deals = conn.execute(
-        "SELECT * FROM deals WHERE rep_id = ? ORDER BY close_date", (rep_id,)
+        "SELECT * FROM deals WHERE org_id = ? AND rep_id = ? ORDER BY close_date",
+        (org_id, rep_id),
     ).fetchall()
 
     open_deals, won_deals, lost_deals = [], [], []
@@ -134,8 +136,8 @@ def rep_metrics(conn, rep, today=None):
     act = conn.execute(
         """SELECT COALESCE(SUM(calls),0) c, COALESCE(SUM(emails),0) e,
                   COALESCE(SUM(meetings),0) m, COALESCE(SUM(demos),0) dm
-             FROM activities WHERE rep_id = ? AND week_start >= ?""",
-        (rep_id, four_weeks_ago),
+             FROM activities WHERE org_id = ? AND rep_id = ? AND week_start >= ?""",
+        (org_id, rep_id, four_weeks_ago),
     ).fetchone()
     # Meetings and demos are the activity that correlates with revenue. Calls and
     # emails are inputs to those, tracked but not scored.
@@ -155,8 +157,8 @@ def rep_metrics(conn, rep, today=None):
     certs = conn.execute(
         """SELECT c.*, t.name track_name, t.is_mandatory, t.required_for
              FROM certifications c JOIN cert_tracks t ON t.id = c.track_id
-            WHERE c.rep_id = ?""",
-        (rep_id,),
+            WHERE c.org_id = ? AND c.rep_id = ?""",
+        (org_id, rep_id),
     ).fetchall()
     expired = [c for c in certs if c["status"] == "expired" and c["is_mandatory"]]
     expiring = [
@@ -166,9 +168,10 @@ def rep_metrics(conn, rep, today=None):
     ]
     missing = conn.execute(
         """SELECT t.* FROM cert_tracks t
-            WHERE t.is_mandatory = 1
-              AND t.id NOT IN (SELECT track_id FROM certifications WHERE rep_id = ?)""",
-        (rep_id,),
+            WHERE t.org_id = ? AND t.is_mandatory = 1
+              AND t.id NOT IN (SELECT track_id FROM certifications
+                                WHERE org_id = ? AND rep_id = ?)""",
+        (org_id, org_id, rep_id),
     ).fetchall()
 
     return {
@@ -202,17 +205,18 @@ def rep_metrics(conn, rep, today=None):
     }
 
 
-def team_median_engagements(conn, manager_id, today=None):
+def team_median_engagements(conn, org_id, manager_id, today=None):
     """Median meetings+demos over the trailing four weeks for a manager's team."""
     today = today or date.today()
     cutoff = (today - timedelta(days=28)).isoformat()
     rows = conn.execute(
         """SELECT COALESCE(SUM(a.meetings + a.demos), 0) n
              FROM reps r LEFT JOIN activities a
-               ON a.rep_id = r.id AND a.week_start >= ?
-            WHERE r.manager_id = ? AND r.role = 'rep' AND r.status = 'active'
+               ON a.rep_id = r.id AND a.org_id = r.org_id AND a.week_start >= ?
+            WHERE r.org_id = ? AND r.manager_id = ? AND r.role = 'rep'
+              AND r.status = 'active'
             GROUP BY r.id""",
-        (cutoff, manager_id),
+        (cutoff, org_id, manager_id),
     ).fetchall()
     values = sorted(r["n"] for r in rows)
     if not values:
@@ -236,7 +240,7 @@ def evaluate_rep(conn, rep, today=None, team_median=None):
     score = 100
 
     if team_median is None and rep["manager_id"]:
-        team_median = team_median_engagements(conn, rep["manager_id"], today)
+        team_median = team_median_engagements(conn, rep["org_id"], rep["manager_id"], today)
 
     # A seat that hasn't started yet is not a performance problem. Score it neutral
     # and say why, rather than running pace and pipeline rules against a rep whose
@@ -439,7 +443,7 @@ def evaluate_rep(conn, rep, today=None, team_median=None):
     return {"score": score, "band": key, "band_label": label, "signals": signals, "metrics": m}
 
 
-def recommended_courses(conn, signals):
+def recommended_courses(conn, org_id, signals):
     """
     Map fired signals to the courses that address them.
 
@@ -452,12 +456,13 @@ def recommended_courses(conn, signals):
         return []
     marks = ",".join("?" * len(keys))
     return conn.execute(
-        f"SELECT * FROM courses WHERE fixes_signal IN ({marks}) ORDER BY category, title",
-        tuple(keys),
+        f"""SELECT * FROM courses WHERE org_id = ? AND fixes_signal IN ({marks})
+             ORDER BY category, title""",
+        tuple([org_id] + list(keys)),
     ).fetchall()
 
 
-def evaluate_org(conn, today=None, manager_id=None):
+def evaluate_org(conn, org_id, today=None, manager_id=None, rep_ids=None):
     """
     Roll every rep up into one view of the org (or one manager's team).
 
@@ -465,14 +470,25 @@ def evaluate_org(conn, today=None, manager_id=None):
     dashboard for: attainment, coverage, band distribution, and who is at risk.
     """
     today = today or date.today()
+    where = "WHERE org_id = ? AND role = 'rep' AND status = 'active'"
+    params = [org_id]
     if manager_id:
+        where += " AND manager_id = ?"
+        params.append(manager_id)
+    # `rep_ids` is the row-level ACL from auth.visible_rep_ids(). An empty set is a
+    # real answer meaning "this user sees no reps" — it must not be read as "no
+    # filter", which is why it is checked against None rather than falsiness.
+    if rep_ids is not None:
+        if not rep_ids:
+            rows = []
+            params = None
+        else:
+            marks = ",".join("?" * len(rep_ids))
+            where += f" AND id IN ({marks})"
+            params.extend(rep_ids)
+    if params is not None:
         rows = conn.execute(
-            "SELECT * FROM reps WHERE manager_id = ? AND role = 'rep' AND status = 'active' ORDER BY name",
-            (manager_id,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM reps WHERE role = 'rep' AND status = 'active' ORDER BY name"
+            f"SELECT * FROM reps {where} ORDER BY name", tuple(params)
         ).fetchall()
 
     medians = {}
@@ -480,7 +496,7 @@ def evaluate_org(conn, today=None, manager_id=None):
     for rep in rows:
         mgr = rep["manager_id"]
         if mgr not in medians:
-            medians[mgr] = team_median_engagements(conn, mgr, today)
+            medians[mgr] = team_median_engagements(conn, org_id, mgr, today)
         ev = evaluate_rep(conn, rep, today, team_median=medians[mgr])
         ev["rep"] = rep
         evals.append(ev)
@@ -518,20 +534,26 @@ def evaluate_org(conn, today=None, manager_id=None):
     }
 
 
-def pipeline_by_stage(conn, manager_id=None):
+def pipeline_by_stage(conn, org_id, manager_id=None, rep_ids=None):
     """Funnel view — open dollars per stage, for the dashboard's stage bars."""
     stages = ["discovery", "demo", "proposal", "negotiation"]
-    where = "WHERE d.stage = ?"
-    params = []
+    where = "WHERE d.org_id = ? AND d.stage = ?"
+    params = [org_id]
     if manager_id:
         where += " AND r.manager_id = ?"
         params.append(manager_id)
+    if rep_ids is not None:
+        if not rep_ids:
+            return [{"stage": s, "label": s.title(), "count": 0, "amount": 0} for s in stages]
+        where += f" AND d.rep_id IN ({','.join('?' * len(rep_ids))})"
+        params.extend(rep_ids)
     out = []
     for s in stages:
         row = conn.execute(
             f"""SELECT COUNT(*) n, COALESCE(SUM(d.amount),0) amt
-                  FROM deals d JOIN reps r ON r.id = d.rep_id {where}""",
-            tuple([s] + params),
+                  FROM deals d JOIN reps r ON r.id = d.rep_id AND r.org_id = d.org_id
+                  {where}""",
+            tuple([params[0], s] + params[1:]),
         ).fetchone()
         out.append({"stage": s, "label": s.title(), "count": row["n"], "amount": row["amt"]})
     return out
