@@ -1,0 +1,15 @@
+# QuotaOS runtime dependencies.
+#
+# Pinned to minor versions: a surprise Flask or Werkzeug upgrade in a deploy is
+# how a working app stops booting on a Tuesday. Bump these deliberately.
+Flask~=3.1
+Werkzeug~=3.1
+gunicorn~=23.0
+
+# The Claude-backed hiring features. The app runs without credentials — see
+# ai_engine.py — but not without the package installed.
+anthropic~=0.112
+
+# Postgres driver. Unused locally (SQLite is the fallback when DATABASE_URL is
+# unset), required on Render. The binary wheel avoids needing libpq at build time.
+psycopg[binary]~=3.2

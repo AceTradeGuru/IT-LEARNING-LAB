@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — QuotaOS</title>
+<style>
+  :root { --ink:#0d1526; --brand:#4f46e5; --line:#e3e7ef; --text:#1e2635; --muted:#6b7488; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+         background:var(--ink); color:var(--text); display:flex; min-height:100vh;
+         align-items:center; justify-content:center; padding:1.5rem; font-size:14px; }
+  .box { background:#fff; border-radius:14px; padding:2rem; width:100%; max-width:380px;
+         box-shadow:0 20px 50px rgba(0,0,0,.35); }
+  .brand { font-size:1.5rem; font-weight:800; letter-spacing:-.6px; margin-bottom:.2rem; }
+  .brand span { color:var(--brand); }
+  .sub { color:var(--muted); margin-bottom:1.4rem; font-size:.88rem; }
+  label { display:block; font-size:.72rem; font-weight:700; color:var(--muted);
+          letter-spacing:.04em; text-transform:uppercase; margin:.9rem 0 .25rem; }
+  input { width:100%; padding:.6rem .7rem; border:1px solid var(--line); border-radius:8px;
+          font-size:.95rem; font-family:inherit; }
+  input:focus { outline:none; border-color:var(--brand); box-shadow:0 0 0 3px rgba(79,70,229,.12); }
+  .btn { width:100%; margin-top:1.3rem; border:none; cursor:pointer; border-radius:8px;
+         padding:.65rem 1rem; font-weight:700; font-size:.92rem; background:var(--brand);
+         color:#fff; font-family:inherit; }
+  .flash { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:.6rem .8rem;
+           border-radius:8px; margin-bottom:1rem; font-size:.85rem; font-weight:600; }
+  .alt { margin-top:1.2rem; font-size:.85rem; color:var(--muted); text-align:center; }
+  .alt a { color:var(--brand); font-weight:600; text-decoration:none; }
+  .demo { margin-top:1.4rem; padding-top:1rem; border-top:1px solid var(--line);
+          font-size:.78rem; color:var(--muted); line-height:1.6; }
+  .demo b { color:var(--text); }
+  .demo code { background:#f1f3f8; padding:.05rem .3rem; border-radius:4px; }
+</style>
+</head>
+<body>
+  <form class="box" method="post">
+    <div class="brand">Quota<span>OS</span></div>
+    <div class="sub">Sign in to your organization.</div>
+
+    {% with messages = get_flashed_messages() %}
+      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    {% endwith %}
+
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+
+    <label for="email">Work email</label>
+    <input id="email" name="email" type="email" required autofocus
+           autocomplete="username" value="{{ email }}">
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required
+           autocomplete="current-password">
+
+    <button class="btn">Sign in</button>
+
+    <div class="alt">No account? <a href="{{ url_for('signup') }}">Create an organization</a></div>
+
+    <div class="demo">
+      <b>Demo tenant.</b> Each login shows a different slice of the same data —
+      an owner sees the whole org, a manager only their team, a member only
+      themselves.<br>
+      <code>dana@northwind.example</code> (owner) ·
+      <code>marcus@northwind.example</code> (manager) ·
+      <code>greg@northwind.example</code> (member)<br>
+      Password: <code>quotaos-demo-2026</code>
+    </div>
+  </form>
+</body>
+</html>

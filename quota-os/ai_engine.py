@@ -32,6 +32,37 @@ MODEL = "claude-opus-5"
 # than no answer, so this runs at high effort rather than the cost-optimized tier.
 EFFORT = "high"
 
+# Claude Opus 5 list price, US cents per million tokens. Used to convert the usage
+# the API reports into a number that can be checked against an org's monthly cap.
+# Update these if pricing changes — they are not fetched at runtime on purpose,
+# because a billing guard that depends on a network call fails open.
+CENTS_PER_MTOK_IN = 500
+CENTS_PER_MTOK_OUT = 2500
+
+# Every _ask() appends the cost of that call here; the caller drains it. A module
+# global rather than a return value so the four public functions keep their
+# (result, engine) signature and callers that ignore cost stay correct.
+_last_call_cents = []
+
+
+def drain_cost_cents():
+    """Return and clear the cost of model calls made since the last drain."""
+    total = sum(_last_call_cents)
+    _last_call_cents.clear()
+    return total
+
+
+def estimate_cents(usage):
+    if usage is None:
+        return 0
+    read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    plain = getattr(usage, "input_tokens", 0) or 0
+    out = getattr(usage, "output_tokens", 0) or 0
+    # Cache reads bill at ~0.1x and writes at ~1.25x of the input rate.
+    billable_in = plain + write * 1.25 + read * 0.1
+    return (billable_in * CENTS_PER_MTOK_IN + out * CENTS_PER_MTOK_OUT) / 1_000_000
+
 _client = None
 _client_checked = False
 
@@ -99,6 +130,8 @@ def _ask(system, prompt, schema=None, max_tokens=16000):
     # check the stop reason before indexing into content.
     if response.stop_reason == "refusal":
         raise RuntimeError("request declined by safety classifiers")
+
+    _last_call_cents.append(estimate_cents(getattr(response, "usage", None)))
 
     text = next((b.text for b in response.content if b.type == "text"), "")
     if not text:

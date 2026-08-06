@@ -15,6 +15,7 @@
 </p>
 
 <form method="post">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
   {% for q in questions %}
     <div class="qcard">
       <div class="qhead">

@@ -1,0 +1,60 @@
+# Render blueprint for QuotaOS.
+#
+# Deploy: push this repo to GitHub, then in Render choose
+# New → Blueprint and point it at the repo. Render reads this file, creates the
+# web service and the Postgres instance, and wires DATABASE_URL between them.
+#
+# Two values you must set by hand in the Render dashboard after the first deploy
+# (they are marked sync:false so they are never read from the repo):
+#   SECRET_KEY         — python3 -c "import secrets; print(secrets.token_hex(32))"
+#   ANTHROPIC_API_KEY  — optional; without it the offline engine runs
+#
+# The database is NOT seeded automatically. Seeding would create the Northwind
+# demo tenant with a published password on your production database. Real tenants
+# come from /signup. To create the schema on first deploy, open a Render shell and
+# run:  python3 -c "from quota_db import create_tables; create_tables()"
+
+databases:
+  - name: quotaos-db
+    databaseName: quotaos
+    plan: basic-256mb        # ~$7/mo. Raise before you have real load.
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: quotaos
+    runtime: python
+    plan: starter            # ~$7/mo
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    # 4 workers on the starter plan's shared CPU. The AI endpoints are IO-bound
+    # waiting on the model, so workers are cheap; revisit if memory gets tight.
+    startCommand: gunicorn --workers 4 --timeout 120 --bind 0.0.0.0:$PORT --access-logfile - --error-logfile - app:app
+    healthCheckPath: /login
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quotaos-db
+          property: connectionString
+      - key: QUOTAOS_ENV
+        value: production
+      - key: QUOTAOS_DEBUG
+        value: "0"
+      - key: SESSION_COOKIE_SECURE
+        value: "1"
+      - key: SESSION_HOURS
+        value: "12"
+      # $90/month per tenant, matching orgs.ai_cents_cap. The database column is
+      # authoritative per-org; this is the default applied to new signups.
+      - key: AI_CALLS_PER_HOUR
+        value: "60"
+      - key: AI_SEARCH_MAX_CANDIDATES
+        value: "60"
+      - key: CANDIDATE_RETENTION_DAYS
+        value: "365"
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: SECRET_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

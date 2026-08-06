@@ -29,6 +29,7 @@
       <div class="row" style="justify-content:space-between;align-items:flex-start">
         <h3 style="margin:0">Job posting</h3>
         <form method="post" action="{{ url_for('req_posting', req_id=req.id) }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <button class="btn {{ 'btn-ghost' if req.posting_md else 'btn-primary' }} btn-sm">
             {{ 'Regenerate with AI' if req.posting_md else 'Write posting with AI' }}
           </button>

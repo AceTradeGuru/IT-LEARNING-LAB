@@ -124,6 +124,7 @@
               <div class="tiny muted" style="margin-top:.2rem">{{ c.summary }}</div>
             </div>
             <form method="post" action="{{ url_for('assign_course', rep_id=rep.id, course_id=c.id) }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="reason" value="Assigned from health signal: {{ c.fixes_signal }}">
               <button class="btn btn-ghost btn-sm">Assign</button>
             </form>

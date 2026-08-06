@@ -275,10 +275,20 @@
       <a href="{{ url_for('pipeline') }}" class="{{ 'on' if request.endpoint == 'pipeline' }}">Pipeline</a>
       <div class="navgroup">The bench</div>
       <a href="{{ url_for('training') }}" class="{{ 'on' if request.endpoint == 'training' }}">Training &amp; certs</a>
-      <div class="navgroup">The funnel</div>
-      <a href="{{ url_for('hiring') }}" class="{{ 'on' if request.endpoint in ('hiring','req_detail','req_new','application_detail','interview_run','onboard') }}">Hiring</a>
-      <a href="{{ url_for('search') }}" class="{{ 'on' if request.endpoint == 'search' }}">AI resume search</a>
-      <a href="{{ url_for('candidates') }}" class="{{ 'on' if request.endpoint == 'candidates' }}">Candidate pool</a>
+      {# Hiring is manager+ only — a rep has no business in the candidate pool. #}
+      {% if has_role('manager') %}
+        <div class="navgroup">The funnel</div>
+        <a href="{{ url_for('hiring') }}" class="{{ 'on' if request.endpoint in ('hiring','req_detail','req_new','application_detail','interview_run','onboard') }}">Hiring</a>
+        <a href="{{ url_for('search') }}" class="{{ 'on' if request.endpoint == 'search' }}">AI resume search</a>
+        <a href="{{ url_for('candidates') }}" class="{{ 'on' if request.endpoint == 'candidates' }}">Candidate pool</a>
+      {% endif %}
+      {% if has_role('admin') %}
+        <div class="navgroup">Settings</div>
+        <a href="{{ url_for('settings_audit') }}" class="{{ 'on' if request.endpoint == 'settings_audit' }}">AI decision log</a>
+        {% if has_role('owner') %}
+          <a href="{{ url_for('settings_users') }}" class="{{ 'on' if request.endpoint == 'settings_users' }}">Users</a>
+        {% endif %}
+      {% endif %}
     </nav>
     <div class="enginebox">
       <b><span class="dot {{ 'live' if engine.live else 'off' }}"></span>{{ engine.label }}</b>
@@ -290,15 +300,21 @@
     <div class="topbar">
       <div class="crumb">{% block crumb %}{% endblock %}</div>
       <div class="spacer"></div>
-      <form class="viewer" method="post" action="{{ url_for('set_viewer') }}">
-        <input type="hidden" name="next" value="{{ request.path }}">
-        <span>Viewing as</span>
-        <select name="viewer_id" onchange="this.form.submit()">
-          {% for v in all_viewers %}
-            <option value="{{ v.id }}" {% if me and v.id == me.id %}selected{% endif %}>{{ v.name }} — {{ v.title }}</option>
-          {% endfor %}
-        </select>
-      </form>
+      {% if user %}
+        <div class="viewer">
+          <span class="avatar">{{ user.name.split()[0][0] }}{{ user.name.split()[-1][0] }}</span>
+          <span>
+            <b style="color:var(--text)">{{ user.name }}</b>
+            <span class="badge neutral">{{ user.role }}</span>
+            <span style="display:block;font-size:.72rem">{{ user.org_name }}</span>
+          </span>
+          <form method="post" action="{{ url_for('logout') }}" class="inline">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button class="btn btn-ghost btn-sm">Sign out</button>
+          </form>
+        </div>
+      {% endif %}
     </div>
     <main>
       {% with messages = get_flashed_messages() %}

@@ -3,7 +3,7 @@
 {% block crumb %}{{ org.quarter }} — {{ 'My team' if scoped else 'Whole org' }}{% endblock %}
 
 {% block content %}
-<h1>{{ me.name }}{% if scoped %}'s team{% endif %}</h1>
+<h1>{{ user.org_name }}{% if scoped %} — {{ user.name }}'s team{% endif %}</h1>
 <p class="sub">
   {{ org.quarter }} is {{ org.pace_pct }}% elapsed. {{ org.headcount }} quota-carrying
   {{ 'rep' if org.headcount == 1 else 'reps' }}, {{ org.bands.at_risk + org.bands.watch }}

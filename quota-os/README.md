@@ -22,7 +22,8 @@ python3 app.py
 
 Open http://localhost:5003
 
-Requires Python 3 and Flask. The AI features work with no API key — see
+Requires Python 3, Flask, and Werkzeug. Sign in with a demo login (printed by
+`quota_db.py`). The AI features work with no API key — see
 [The AI layer](#the-ai-layer) below.
 
 ## The 3-minute walkthrough
@@ -30,7 +31,8 @@ Requires Python 3 and Flask. The AI features work with no API key — see
 **1. Dashboard** (`/`) — Q3 attainment against a pace marker, pipeline coverage,
 the band distribution across the org, and the number that has no business being
 buried in an LMS: how many reps are selling on a lapsed mandatory certification.
-Switch "Viewing as" between the VP and any manager to rescope every number.
+Sign in as the owner, a manager, and a member in turn — the same page rescopes to
+what each role is allowed to see.
 
 **2. Greg Nowak** (`/rep/8`) — the reason this exists. Greg was President's Club
 last year. His attainment column doesn't look catastrophic. His health score is
@@ -161,8 +163,21 @@ schema.sql        Twelve tables across the three surfaces
 templates/        Jinja templates, one inline design system in base.html
 ```
 
+## Security and tenancy
+
+Multi-tenant with real authentication. Every tenant-owned table carries `org_id`
+and every query filters on it, including where a join would make it redundant —
+one forgotten filter should leak nothing. Four roles gate routes (`member` →
+`manager` → `admin` → `owner`) and row access below that: a member sees only their
+own seat, a manager only their team.
+
+CSRF on every POST, scrypt-hashed passwords, `HttpOnly`/`SameSite`/`Secure`
+cookies, config entirely from environment, and an `audit_log` recording every
+AI-generated artifact and score for employment-decision compliance.
+
 ## Status
 
-Prototype. SQLite, no authentication, `debug=True`, and a demo secret key — it
-demonstrates the product thesis, it is not deployable as-is. The "Viewing as"
-switcher is a stand-in for real auth and role-based scoping.
+Runs, and the security model is tested — but it is not yet in production. SQLite
+needs to become Postgres and the rate limiter needs to leave process memory before
+real customer data lands in it. See [DEPLOY.md](DEPLOY.md) for exactly what is
+done, what is left, and the AI-hiring regulation you need counsel on.

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}AI decision log{% endblock %}
+{% block crumb %}Settings / AI decision log{% endblock %}
+
+{% block content %}
+<h1>AI decision log</h1>
+<p class="sub">
+  Every AI-assisted and consequential action in {{ user.org_name }}, newest first —
+  what was generated or scored, by which engine, for whom, and who was signed in at
+  the time. This exists because "the model said 62" is not an answer you can give a
+  candidate or a regulator on its own. Keep it if you use AI anywhere in hiring.
+</p>
+
+<div class="grid g3" style="margin-bottom:1rem">
+  <div class="kpi">
+    <div class="lbl">AI spend — {{ month }}</div>
+    <div class="num">${{ '%.2f'|format(spent / 100) }}</div>
+    <div class="note">of ${{ (cap / 100)|round|int }} monthly cap</div>
+    <div class="track">
+      <i class="{{ 'at_risk' if spent >= cap else 'watch' if spent > cap * 0.7 else 'strong' }}"
+         style="width:{{ [spent / cap * 100, 100]|min if cap else 0 }}%"></i>
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Remaining</div>
+    <div class="num sm">${{ '%.2f'|format(((cap - spent) if cap > spent else 0) / 100) }}</div>
+    <div class="note">Model calls are blocked at the cap, not billed past it.</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Logged actions</div>
+    <div class="num sm">{{ rows|length }}</div>
+    <div class="note">most recent 300</div>
+  </div>
+</div>
+
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>When</th><th>Action</th><th>Entity</th><th>Engine</th><th>User</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="tiny muted" style="white-space:nowrap">{{ r.created_at|replace('T',' ') }}</td>
+        <td><span class="badge {{ 'brand' if r.action.startswith('ai.') else 'neutral' }}">{{ r.action }}</span></td>
+        <td class="tiny mono">{{ r.entity or '—' }}</td>
+        <td class="tiny">
+          {% if r.engine %}
+            <span class="badge {{ 'brand' if r.engine == 'claude' else 'neutral' }}">{{ r.engine }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="tiny">{{ r.user_name or '—' }}</td>
+        <td class="tiny muted" style="max-width:46ch;word-break:break-word">{{ r.detail|truncate(220) if r.detail else '—' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6"><div class="empty">Nothing logged yet.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<p class="tiny muted">
+  Showing the most recent 300 entries. Retention, export, and the annual bias audit
+  that NYC Local Law 144 requires are process decisions your organization owns —
+  this log is the evidence they depend on, not a substitute for them.
+</p>
+{% endblock %}
