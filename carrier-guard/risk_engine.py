@@ -23,7 +23,7 @@ a broker can show their boss exactly which points came from where.
 """
 
 from collections import namedtuple
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 # A fired risk signal. `weight` is added to the risk score; negative weights
 # are mitigating evidence (a carrier can earn its way down).
@@ -87,17 +87,27 @@ def levenshtein(a, b):
     return prev[-1]
 
 
-def _days_since(iso_date):
-    """Days between an ISO date and today. None if the date is missing."""
-    if not iso_date:
+def _days_since(value):
+    """
+    Days between a stored date and today. None if the date is missing.
+
+    Postgres hands back real `date` objects, so there is no parsing here — but
+    `datetime` is accepted too, since timestamp columns pass through the same
+    helpers.
+    """
+    if not value:
         return None
-    return (date.today() - date.fromisoformat(iso_date[:10])).days
+    return (date.today() - _as_date(value)).days
 
 
-def _days_until(iso_date):
-    if not iso_date:
+def _days_until(value):
+    if not value:
         return None
-    return (date.fromisoformat(iso_date[:10]) - date.today()).days
+    return (_as_date(value) - date.today()).days
+
+
+def _as_date(value):
+    return value.date() if isinstance(value, datetime) else value
 
 
 # ---------------------------------------------------------------- the rules
@@ -187,12 +197,15 @@ def _insurance_signals(carrier, load_value):
 
 def _safety_signals(carrier):
     out = []
-    if (carrier["oos_rate"] or 0) > HIGH_OOS_RATE:
+    # NUMERIC comes back as Decimal; float() keeps the comparison and the
+    # formatting below from depending on mixed-type arithmetic.
+    oos = float(carrier["oos_rate"] or 0)
+    if oos > HIGH_OOS_RATE:
         out.append(Signal(
             "HIGH_OOS_RATE",
             "Out-of-service rate well above national average",
-            f"{carrier['oos_rate'] * 100:.0f}% of inspections resulted in an "
-            f"out-of-service order (national average is roughly 13%).",
+            f"{oos * 100:.0f}% of inspections resulted in an out-of-service "
+            f"order (national average is roughly 13%).",
             14, "high", "safety"))
     return out
 
@@ -279,7 +292,7 @@ def _network_signals(conn, mc_number, contact_email, contact_phone, broker_id):
     out = []
 
     reports = conn.execute(
-        """SELECT * FROM fraud_reports WHERE mc_number = ?
+        """SELECT * FROM fraud_reports WHERE mc_number = %s
            ORDER BY verified DESC, created_at DESC""",
         (mc_number,)).fetchall()
 
@@ -305,14 +318,15 @@ def _network_signals(conn, mc_number, contact_email, contact_phone, broker_id):
             22, "high", "network"))
 
     # Contact churn: one MC number wearing several different faces at once.
+    # The window is a bound parameter, not string-interpolated SQL.
     churn = conn.execute(
-        f"""SELECT COUNT(DISTINCT contact_email) AS emails,
-                   COUNT(DISTINCT broker_id)     AS brokers
-            FROM contact_observations
-            WHERE mc_number = ?
-              AND contact_email IS NOT NULL AND contact_email != ''
-              AND last_seen >= datetime('now', '-{CONTACT_CHURN_WINDOW} days')""",
-        (mc_number,)).fetchone()
+        """SELECT COUNT(DISTINCT contact_email) AS emails,
+                  COUNT(DISTINCT broker_id)     AS brokers
+           FROM contact_observations
+           WHERE mc_number = %s
+             AND contact_email <> ''
+             AND last_seen >= now() - make_interval(days => %s)""",
+        (mc_number, CONTACT_CHURN_WINDOW)).fetchone()
 
     if (churn["emails"] >= CONTACT_CHURN_EMAILS
             and churn["brokers"] >= CONTACT_CHURN_BROKERS):
@@ -329,7 +343,7 @@ def _network_signals(conn, mc_number, contact_email, contact_phone, broker_id):
         """SELECT SUM(times_seen) AS hits, COUNT(DISTINCT broker_id) AS brokers,
                   MIN(first_seen) AS since
            FROM contact_observations
-           WHERE mc_number = ? AND contact_email = ?""",
+           WHERE mc_number = %s AND contact_email = %s""",
         (mc_number, (contact_email or "").strip().lower())).fetchone()
 
     if seen["hits"] and seen["hits"] >= 3 and not reports:
@@ -337,7 +351,7 @@ def _network_signals(conn, mc_number, contact_email, contact_phone, broker_id):
             "CONTACT_ESTABLISHED",
             "This exact contact has a clean history on the network",
             f"Seen {seen['hits']} times by {seen['brokers']} broker(s) since "
-            f"{seen['since'][:10]}, with no fraud reports.",
+            f"{_as_date(seen['since'])}, with no fraud reports.",
             -12, "good", "network"))
 
     return out
@@ -363,7 +377,7 @@ def evaluate(conn, broker_id, mc_number, contact_email="", contact_phone="",
     phone_digits = normalize_phone(contact_phone)
 
     carrier = conn.execute(
-        "SELECT * FROM carriers WHERE mc_number = ?", (mc_number,)).fetchone()
+        "SELECT * FROM carriers WHERE mc_number = %s", (mc_number,)).fetchone()
 
     signals = []
 
@@ -380,7 +394,7 @@ def evaluate(conn, broker_id, mc_number, contact_email="", contact_phone="",
         phone_type = "unknown"
         if phone_digits:
             row = conn.execute(
-                "SELECT line_type FROM phone_intel WHERE phone = ?",
+                "SELECT line_type FROM phone_intel WHERE phone = %s",
                 (phone_digits,)).fetchone()
             if row:
                 phone_type = row["line_type"]
@@ -414,11 +428,14 @@ def run_check(conn, broker_id, mc_number, contact_email="", contact_phone="",
     network's contact memory. Returns (check_id, result).
 
     `at` backdates the record (used to seed a believable history).
+
+    Does not commit — the caller's `db.connection()` block owns the transaction,
+    so a failure partway through leaves no check row with missing signals behind.
     """
     mc_number = (mc_number or "").strip().upper()
     contact_email = (contact_email or "").strip().lower()
     phone_digits = normalize_phone(contact_phone)
-    stamp = at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stamp = at or datetime.now(UTC)
 
     result = evaluate(conn, broker_id, mc_number, contact_email, phone_digits, load_value)
 
@@ -426,26 +443,29 @@ def run_check(conn, broker_id, mc_number, contact_email="", contact_phone="",
     cur.execute(
         """INSERT INTO checks (broker_id, mc_number, contact_name, contact_email,
                                contact_phone, load_value_usd, risk_score, verdict, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+           RETURNING id""",
         (broker_id, mc_number, contact_name.strip() or None, contact_email or None,
          phone_digits or None, load_value, result["score"], result["verdict"], stamp))
-    check_id = cur.lastrowid
+    check_id = cur.fetchone()["id"]
 
-    cur.executemany(
-        """INSERT INTO check_signals (check_id, code, label, detail, weight, severity, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        [(check_id, s.code, s.label, s.detail, s.weight, s.severity, s.source)
-         for s in result["signals"]])
+    if result["signals"]:
+        cur.executemany(
+            """INSERT INTO check_signals
+                   (check_id, code, label, detail, weight, severity, source)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            [(check_id, s.code, s.label, s.detail, s.weight, s.severity, s.source)
+             for s in result["signals"]])
 
     # Remember this contact — it is what makes the next broker's check smarter.
     if contact_email or phone_digits:
         cur.execute(
             """INSERT INTO contact_observations
                    (mc_number, contact_email, contact_phone, broker_id, first_seen, last_seen)
-               VALUES (?, ?, ?, ?, ?, ?)
+               VALUES (%s, %s, %s, %s, %s, %s)
                ON CONFLICT (mc_number, contact_email, contact_phone, broker_id)
-               DO UPDATE SET times_seen = times_seen + 1, last_seen = excluded.last_seen""",
+               DO UPDATE SET times_seen = contact_observations.times_seen + 1,
+                             last_seen  = EXCLUDED.last_seen""",
             (mc_number, contact_email, phone_digits, broker_id, stamp, stamp))
 
-    conn.commit()
     return check_id, result

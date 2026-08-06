@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ code }}{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align:center; padding:3rem 1.5rem;">
+  <div style="font-size:3.5rem; font-weight:900; color:var(--muted); line-height:1;">
+    {{ code }}
+  </div>
+  <p style="margin:1rem 0 1.5rem; font-size:1.05rem;">{{ message }}</p>
+  <a class="btn btn-primary" href="{{ url_for('index') }}">Back to home</a>
+</div>
+{% endblock %}

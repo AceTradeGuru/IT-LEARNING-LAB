@@ -1,0 +1,21 @@
+# Local development stack. Production uses a managed Postgres instance;
+# this exists so `docker compose up -d db` gives you the same engine locally.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: carrierguard
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: carrierguard
+    ports:
+      - "5433:5432"        # 5433 on the host, to stay clear of any local Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carrierguard -d carrierguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

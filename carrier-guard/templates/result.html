@@ -15,7 +15,7 @@
 <p class="muted" style="margin:-0.5rem 0 1.3rem;">
   Check #{{ check_id }} &middot; {{ mc_number }}
   {% if submitted.contact_name %} &middot; spoke to {{ submitted.contact_name }}{% endif %}
-  {% if historical %} &middot; run {{ historical[:16] }}{% endif %}
+  {% if historical %} &middot; run {{ historical.strftime('%Y-%m-%d %H:%M') }}{% endif %}
   {% if carrier %} &middot; carrier of record: <strong>{{ carrier.legal_name }}</strong>{% endif %}
 </p>
 
