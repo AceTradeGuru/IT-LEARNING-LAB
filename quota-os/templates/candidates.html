@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Candidate pool{% endblock %}
+{% block crumb %}Candidate pool{% endblock %}
+
+{% block content %}
+<h1>Candidate pool</h1>
+<p class="sub">
+  Every resume in the system, searchable in plain English from the
+  <a href="{{ url_for('search') }}">AI resume search</a>.
+</p>
+
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Candidate</th><th>Current role</th><th class="num">Yrs</th>
+               <th>Location</th><th>Source</th><th class="num">Applications</th><th>Added</th></tr></thead>
+    <tbody>
+    {% for c in candidates %}
+      <tr>
+        <td>
+          <div class="person">
+            <span class="avatar">{{ c.name.split()[0][0] }}{{ c.name.split()[-1][0] }}</span>
+            <span><span class="nm">{{ c.name }}</span>
+              <span class="sub2" style="display:block">{{ c.email }}</span></span>
+          </div>
+        </td>
+        <td class="tiny">{{ c.current_title }}<br><span class="muted">{{ c.current_company }}</span></td>
+        <td class="num tiny">{{ c.years_exp }}</td>
+        <td class="tiny">{{ c.location }}</td>
+        <td class="tiny">{{ c.source }}</td>
+        <td class="num">{{ c.apps }}</td>
+        <td class="tiny muted">{{ c.created_at|since }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

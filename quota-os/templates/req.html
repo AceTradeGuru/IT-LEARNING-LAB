@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}{{ req.title }}{% endblock %}
+{% block crumb %}<a href="{{ url_for('hiring') }}">Hiring</a> / {{ req.title }}{% endblock %}
+
+{% block content %}
+<div class="row" style="justify-content:space-between;align-items:flex-start">
+  <div>
+    <h1>{{ req.title }}</h1>
+    <p class="sub" style="margin-bottom:.5rem">
+      {{ req.level }} · {{ req.team }} · {{ req.segment }} · {{ req.region }}
+      {% if manager %} · hiring manager <a href="{{ url_for('rep_detail', rep_id=manager.id) }}">{{ manager.name }}</a>{% endif %}
+    </p>
+  </div>
+  <span class="badge {{ 'strong' if req.status == 'open' else 'neutral' }}"
+        style="font-size:.8rem;padding:.3rem .7rem">{{ req.status }}</span>
+</div>
+
+<div class="grid g4" style="margin-bottom:1rem">
+  <div class="kpi"><div class="lbl">Annual quota</div><div class="num sm">{{ req.quota_annual|money }}</div></div>
+  <div class="kpi"><div class="lbl">Base</div><div class="num sm">{{ req.comp_base|money }}</div></div>
+  <div class="kpi"><div class="lbl">OTE</div><div class="num sm">{{ req.comp_ote|money }}</div></div>
+  <div class="kpi"><div class="lbl">In funnel</div><div class="num sm">{{ apps|length }}</div>
+    <div class="note">candidates</div></div>
+</div>
+
+<div class="grid split">
+  <div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <h3 style="margin:0">Job posting</h3>
+        <form method="post" action="{{ url_for('req_posting', req_id=req.id) }}">
+          <button class="btn {{ 'btn-ghost' if req.posting_md else 'btn-primary' }} btn-sm">
+            {{ 'Regenerate with AI' if req.posting_md else 'Write posting with AI' }}
+          </button>
+        </form>
+      </div>
+      {% if req.posting_md %}
+        <div class="row tiny muted" style="margin:.5rem 0 1rem">
+          Written by
+          <span class="badge {{ 'brand' if req.posting_source == 'claude' else 'neutral' }}">
+            {{ 'Claude' if req.posting_source == 'claude' else 'offline engine' }}
+          </span>
+        </div>
+        <div class="posting">{{ req.posting_md|markdown }}</div>
+      {% else %}
+        <div class="empty">
+          No posting yet. Generating one turns the knobs below — segment, quota, comp,
+          and must-haves — into a finished posting.<br>
+          <span class="tiny">Currently running: <b>{{ engine.label }}</b></span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Must have</h3>
+      <ul style="margin:.4rem 0 0 1rem">
+        {% for line in req.must_haves.splitlines() %}
+          {% if line.strip() %}<li class="tiny" style="margin:.3rem 0">{{ line.strip() }}</li>{% endif %}
+        {% endfor %}
+      </ul>
+      {% if req.nice_haves %}
+        <h3 style="margin-top:1rem">Nice to have</h3>
+        <ul style="margin:.4rem 0 0 1rem">
+          {% for line in req.nice_haves.splitlines() %}
+            {% if line.strip() %}<li class="tiny" style="margin:.3rem 0">{{ line.strip() }}</li>{% endif %}
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3>Source candidates</h3>
+      <p class="tiny muted">
+        Search the pool in plain English — "closer who's carried $1M+ into healthcare"
+        — and add the matches straight into this funnel.
+      </p>
+      <a class="btn btn-primary btn-sm" style="margin-top:.6rem"
+         href="{{ url_for('search') }}">Open AI resume search</a>
+    </div>
+  </div>
+</div>
+
+<h2>Funnel ({{ apps|length }})</h2>
+<div class="card pad0">
+  {% if apps %}
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Candidate</th><th>Current</th><th class="num">Yrs</th>
+               <th class="num">Match</th><th>Stage</th><th class="num">Interviews</th><th></th></tr></thead>
+    <tbody>
+    {% for a in apps %}
+      <tr>
+        <td><a href="{{ url_for('application_detail', app_id=a.id) }}"><b>{{ a.cand_name }}</b></a>
+          {% if a.match_reason %}<div class="tiny muted" style="max-width:46ch">{{ a.match_reason }}</div>{% endif %}</td>
+        <td class="tiny">{{ a.current_title }}<br><span class="muted">{{ a.current_company }}</span></td>
+        <td class="num tiny">{{ a.years_exp }}</td>
+        <td class="num">
+          {% if a.match_score %}
+            <span class="badge {{ 'strong' if a.match_score >= 80 else 'watch' if a.match_score >= 55 else 'at_risk' }}">{{ a.match_score }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td><span class="badge {{ 'strong' if a.stage == 'hired' else 'at_risk' if a.stage == 'rejected' else 'brand' }}">
+          {{ stage_labels.get(a.stage, a.stage) }}</span></td>
+        <td class="num tiny">{{ a.interviews }}</td>
+        <td><a class="btn btn-ghost btn-sm" href="{{ url_for('application_detail', app_id=a.id) }}">Open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    <div class="empty">Nobody in this funnel yet — start with the AI resume search.</div>
+  {% endif %}
+</div>
+{% endblock %}

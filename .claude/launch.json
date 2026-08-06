@@ -4,14 +4,26 @@
     {
       "name": "freightflip",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["freight-board/app.py"],
+      "runtimeArgs": [
+        "freight-board/app.py"
+      ],
       "port": 5001
     },
     {
       "name": "carrierguard",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["carrier-guard/app.py"],
+      "runtimeArgs": [
+        "carrier-guard/app.py"
+      ],
       "port": 5002
+    },
+    {
+      "name": "quotaos",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "quota-os/app.py"
+      ],
+      "port": 5003
     }
   ]
 }

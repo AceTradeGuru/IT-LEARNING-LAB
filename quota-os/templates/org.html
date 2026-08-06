@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Org &amp; reps{% endblock %}
+{% block crumb %}Org &amp; reps{% endblock %}
+
+{% block content %}
+<h1>Org &amp; reps</h1>
+<p class="sub">
+  Every quota-carrying seat, scored on pace, coverage, hygiene, activity, and
+  certification currency. Click a rep to see which signals fired and why.
+</p>
+
+<div class="pill-nav">
+  {% for key, label in [('score','Worst first'),('attainment','Attainment'),
+                        ('pipeline','Pipeline'),('name','Name')] %}
+    <a href="{{ url_for('org_view', sort=key) }}" class="{{ 'on' if sort == key }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Rep</th><th>Team</th><th class="num">Health</th><th class="num">Attained</th>
+        <th class="num">Closed</th><th class="num">Pipeline</th><th class="num">Cov.</th>
+        <th class="num">Open</th><th>Top signal</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in org.evals %}
+      {% set m = e.metrics %}
+      <tr>
+        <td>
+          <a class="person" href="{{ url_for('rep_detail', rep_id=e.rep.id) }}">
+            <span class="avatar">{{ e.rep.name.split()[0][0] }}{{ e.rep.name.split()[-1][0] }}</span>
+            <span><span class="nm">{{ e.rep.name }}</span>
+              <span class="sub2" style="display:block">{{ e.rep.segment }}{% if m.ramping %} · in ramp{% endif %}</span></span>
+          </a>
+        </td>
+        <td class="tiny">{{ e.rep.team }}</td>
+        <td class="num">
+          <span class="score {{ e.band }}">{{ e.score }}</span>
+          <div class="track" style="width:64px;margin-left:auto">
+            <i class="{{ e.band }}" style="width:{{ e.score }}%"></i>
+          </div>
+        </td>
+        <td class="num">
+          {{ m.attainment_pct }}%
+          <div class="track paced" style="width:70px;margin-left:auto">
+            <i class="{{ 'strong' if m.attainment_pct >= org.pace_pct else 'watch' }}"
+               style="width:{{ [m.attainment_pct,100]|min }}%"></i>
+            <span class="pin" style="left:{{ org.pace_pct }}%"></span>
+          </div>
+        </td>
+        <td class="num">{{ m.closed_q|money }}</td>
+        <td class="num">{{ m.pipeline_q|money }}</td>
+        <td class="num">{{ m.coverage if m.coverage is not none else '—' }}{{ 'x' if m.coverage is not none }}</td>
+        <td class="num">{{ m.open_deals|length }}</td>
+        <td class="tiny">
+          {% set top = e.signals[0] %}
+          <span class="badge {{ 'at_risk' if top.severity in ('critical','high') else 'watch' if top.severity == 'medium' else 'strong' if top.severity == 'good' else 'neutral' }}">{{ top.label }}</span>
+          {% if e.signals|length > 1 %}
+            <span class="muted">+{{ e.signals|length - 1 }} more</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<p class="tiny muted">
+  Health starts at 100 and every signal moves it. The pace marker on each attainment
+  bar is {{ org.pace_pct }}% — how much of {{ org.quarter }} has elapsed.
+</p>
+{% endblock %}

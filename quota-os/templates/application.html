@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}{{ a.cand_name }}{% endblock %}
+{% block crumb %}<a href="{{ url_for('hiring') }}">Hiring</a> /
+  <a href="{{ url_for('req_detail', req_id=a.req_id) }}">{{ a.req_title|truncate(30) }}</a> /
+  {{ a.cand_name }}{% endblock %}
+
+{% block content %}
+<div class="row" style="justify-content:space-between;align-items:flex-start">
+  <div>
+    <h1>{{ a.cand_name }}</h1>
+    <p class="sub" style="margin-bottom:.4rem">
+      {{ a.current_title }} at {{ a.current_company }} · {{ a.years_exp }} years ·
+      {{ a.location }}<br>
+      <span class="tiny">{{ a.email }} · {{ a.phone }} · sourced via {{ a.source }}</span>
+    </p>
+  </div>
+  <div style="text-align:right">
+    <span class="badge {{ 'strong' if a.stage == 'hired' else 'at_risk' if a.stage == 'rejected' else 'brand' }}"
+          style="font-size:.85rem;padding:.35rem .8rem">{{ stage_labels.get(a.stage, a.stage) }}</span>
+    {% if a.match_score %}
+      <div style="margin-top:.4rem" class="tiny muted">Resume match
+        <b class="score {{ 'strong' if a.match_score >= 80 else 'watch' }}">{{ a.match_score }}</b></div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Stage control. The loop is linear on purpose: a hiring process where anyone
+     can jump a candidate to offer isn't a process. -->
+<div class="card row" style="gap:.5rem">
+  <b class="tiny">Move to:</b>
+  {% for s in stages %}
+    {% if s != a.stage %}
+      <form method="post" action="{{ url_for('move_stage', app_id=a.id) }}" class="inline">
+        <input type="hidden" name="to_stage" value="{{ s }}">
+        <button class="btn btn-ghost btn-sm">{{ stage_labels[s] }}</button>
+      </form>
+    {% endif %}
+  {% endfor %}
+  {% if a.stage != 'rejected' %}
+    <form method="post" action="{{ url_for('move_stage', app_id=a.id) }}" class="inline">
+      <input type="hidden" name="to_stage" value="rejected">
+      <button class="btn btn-red btn-sm">Reject</button>
+    </form>
+  {% endif %}
+</div>
+
+<div class="grid split">
+  <div>
+    <div class="row" style="justify-content:space-between;margin:1.2rem 0 .6rem">
+      <h2 style="margin:0">AI interviews</h2>
+      <form method="post" action="{{ url_for('interview_new', app_id=a.id) }}" class="row" style="gap:.4rem">
+        <select name="kind" style="width:auto;font-size:.82rem;padding:.35rem .5rem">
+          {% for k in kinds %}<option value="{{ k }}">{{ k|replace('_',' ')|title }}</option>{% endfor %}
+        </select>
+        <button class="btn btn-primary btn-sm">Generate interview</button>
+      </form>
+    </div>
+
+    {% for iv in interviews %}
+      {% set row = iv.row %}
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <b>{{ row.kind|replace('_',' ')|title }} interview</b>
+            <span class="badge {{ 'brand' if row.engine == 'claude' else 'neutral' }}">
+              {{ 'Claude' if row.engine == 'claude' else 'offline' }}</span>
+            <div class="tiny muted">
+              Generated {{ row.created_at|nicedate }}{% if row.completed_at %} · scored {{ row.completed_at|nicedate }}{% endif %}
+              · {{ iv.questions|length }} questions
+            </div>
+          </div>
+          <div style="text-align:right">
+            {% if row.overall_score is not none %}
+              <div class="score {{ 'strong' if row.overall_score >= 70 else 'watch' if row.overall_score >= 45 else 'at_risk' }}"
+                   style="font-size:1.7rem">{{ row.overall_score }}</div>
+              <span class="badge {{ row.recommendation }}">{{ row.recommendation }}</span>
+            {% else %}
+              <span class="badge watch">not yet conducted</span>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if row.summary %}<p style="margin:.7rem 0">{{ row.summary }}</p>{% endif %}
+
+        {% if iv.scores %}
+          <div class="grid g3" style="margin:.8rem 0">
+            <div>
+              <div class="eyebrow">Strengths</div>
+              <ul style="margin:.3rem 0 0 1rem">
+                {% for s in iv.scores.strengths %}<li class="tiny">{{ s }}</li>{% endfor %}
+              </ul>
+            </div>
+            <div>
+              <div class="eyebrow">Concerns</div>
+              <ul style="margin:.3rem 0 0 1rem">
+                {% for s in iv.scores.concerns %}<li class="tiny">{{ s }}</li>{% endfor %}
+              </ul>
+            </div>
+            <div>
+              <div class="eyebrow">Ask in the next round</div>
+              <ul style="margin:.3rem 0 0 1rem">
+                {% for s in iv.scores.follow_ups %}<li class="tiny">{{ s }}</li>{% endfor %}
+              </ul>
+            </div>
+          </div>
+
+          {% set by_id = {} %}
+          {% for sc in iv.scores.scores %}{% if by_id.update({sc.id: sc}) %}{% endif %}{% endfor %}
+          {% for q in iv.questions %}
+            {% set sc = by_id.get(q.id) %}
+            <div class="qcard">
+              <div class="qhead">
+                <span class="qn">{{ q.id }}</span>
+                <span class="qq">{{ q.question }}</span>
+                <span style="margin-left:auto" class="score {{ 'strong' if sc and sc.score >= 70 else 'watch' if sc and sc.score >= 45 else 'at_risk' }}">
+                  {{ sc.score if sc else '—' }}</span>
+              </div>
+              <span class="badge neutral">{{ q.competency }}</span>
+              <div class="answer">{{ iv.answers.get(q.id|string, '(no answer)') }}</div>
+              {% if sc %}
+                <div class="rubric"><b>Score rationale.</b> {{ sc.rationale }}</div>
+                <div class="rubric"><b>Evidence.</b> {{ sc.evidence }}</div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="row" style="margin-top:.8rem">
+            <a class="btn btn-primary btn-sm" href="{{ url_for('interview_run', interview_id=row.id) }}">
+              Conduct &amp; score this interview</a>
+            <span class="tiny muted">{{ iv.questions|length }} questions ready, rubric published.</span>
+          </div>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="card empty">
+        No interview yet. Generating one writes questions <em>and</em> the rubric they'll
+        be scored against — the rubric exists before any answer does, which is what
+        makes the scores comparable across candidates.
+      </div>
+    {% endfor %}
+
+    <h2>Resume</h2>
+    <div class="card">
+      {% for line in a.resume_text.splitlines() %}
+        {% if line.strip() %}<p style="margin:.35rem 0;max-width:74ch">{{ line }}</p>{% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  <div>
+    {% if a.stage == 'offer' or a.stage == 'hired' %}
+      <div class="card" style="border-color:var(--strong)">
+        <h3>Onboarding</h3>
+        <p class="tiny muted">
+          Hiring writes this candidate onto the org chart with a ramp window and
+          enrolls every mandatory certification track.
+        </p>
+        <a class="btn btn-green btn-sm" style="margin-top:.6rem"
+           href="{{ url_for('onboard', app_id=a.id) }}">Onboard to org chart</a>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <h3>Requisition</h3>
+      <a href="{{ url_for('req_detail', req_id=req.id) }}"><b>{{ req.title }}</b></a>
+      <div class="tiny muted" style="margin-top:.3rem">
+        {{ req.level }} · {{ req.segment }} · {{ req.region }}<br>
+        {{ req.quota_annual|money }} quota · {{ req.comp_ote|money }} OTE
+      </div>
+      {% if a.match_reason %}
+        <div class="rubric" style="margin-top:.7rem"><b>Why sourced.</b> {{ a.match_reason }}</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h3>Stage history</h3>
+      <div class="timeline">
+        {% for e in events %}
+          <div class="ev">
+            <div class="t">{{ stage_labels.get(e.to_stage, e.to_stage) }}</div>
+            <div class="tiny muted">{{ e.created_at|nicedate }}{% if e.note %} — {{ e.note }}{% endif %}</div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

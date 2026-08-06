@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}{{ rep.name }}{% endblock %}
+{% block crumb %}<a href="{{ url_for('org_view') }}">Org</a> / {{ rep.name }}{% endblock %}
+
+{% block content %}
+<div class="row" style="justify-content:space-between;align-items:flex-start">
+  <div>
+    <h1>{{ rep.name }}</h1>
+    <p class="sub" style="margin-bottom:.6rem">
+      {{ rep.title }} · {{ rep.team }} · {{ rep.region }}
+      {% if manager %} · reports to <a href="{{ url_for('rep_detail', rep_id=manager.id) }}">{{ manager.name }}</a>{% endif %}
+      <br>Hired {{ rep.hire_date|nicedate }}
+      {% if m.not_started %} · <span class="badge neutral">Starts {{ rep.hire_date|nicedate }}</span>
+      {% elif m.ramping %} · <span class="badge on_track">In ramp — {{ m.ramp_pct }}% complete</span>{% endif %}
+    </p>
+    {% if rep.notes %}<p class="tiny muted" style="max-width:70ch">{{ rep.notes }}</p>{% endif %}
+  </div>
+  <div class="card" style="text-align:center;min-width:150px;margin:0">
+    <div class="eyebrow">Health</div>
+    <div class="score {{ ev.band }}" style="font-size:2.6rem;line-height:1.1">{{ ev.score }}</div>
+    <span class="badge {{ ev.band }}">{{ ev.band_label }}</span>
+  </div>
+</div>
+
+<div class="grid g5" style="margin:1.2rem 0">
+  <div class="kpi">
+    <div class="lbl">{{ m.quarter }} attained</div>
+    <div class="num sm">{{ m.attainment_pct }}%</div>
+    <div class="note">{{ m.closed_q|dollars }} of {{ m.quota_q|dollars }}</div>
+    <div class="track paced">
+      <i class="{{ 'strong' if m.attainment_pct >= m.pace_pct else 'watch' }}"
+         style="width:{{ [m.attainment_pct,100]|min }}%"></i>
+      <span class="pin" style="left:{{ m.pace_pct }}%"></span>
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Remaining</div>
+    <div class="num sm">{{ m.remaining|money }}</div>
+    <div class="note">{{ m.pace_pct }}% of the quarter gone</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">In-quarter pipeline</div>
+    <div class="num sm">{{ m.pipeline_q|money }}</div>
+    <div class="note">{{ m.pipeline_all|money }} total open</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Coverage</div>
+    <div class="num sm">{{ m.coverage ~ 'x' if m.coverage is not none else '—' }}</div>
+    <div class="note">3.0x target</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Meetings + demos</div>
+    <div class="num sm">{{ m.engagements }}</div>
+    <div class="note">last 4 weeks</div>
+  </div>
+</div>
+
+<div class="grid split">
+  <div>
+    <h2>Signals</h2>
+    {% for s in ev.signals %}
+      <div class="sig {{ s.severity }}">
+        <div class="pts">{{ '+' if s.points > 0 }}{{ s.points if s.points else '—' }}</div>
+        <div>
+          <div class="lbl">{{ s.label }}</div>
+          <div class="det">{{ s.detail }}</div>
+        </div>
+      </div>
+    {% endfor %}
+
+    <h2>Open pipeline ({{ m.open_deals|length }})</h2>
+    <div class="card pad0">
+      {% if m.open_deals %}
+      <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Account</th><th>Stage</th><th class="num">Amount</th><th>Close</th>
+              <th>Last touch</th><th>Next step</th></tr>
+        </thead>
+        <tbody>
+        {% for d in m.open_deals %}
+          {% set is_stale = d in m.stale %}
+          {% set is_slipped = d in m.slipped %}
+          <tr>
+            <td><b>{{ d.account }}</b><br><span class="tiny muted">{{ d.source }}</span></td>
+            <td><span class="badge neutral">{{ d.stage|replace('_',' ')|title }}</span></td>
+            <td class="num">{{ d.amount|dollars }}</td>
+            <td class="tiny">
+              {{ d.close_date|nicedate }}
+              {% if is_slipped %}
+                <br><span class="badge watch">slipped</span>
+              {% endif %}
+            </td>
+            <td class="tiny {{ 'score at_risk' if is_stale }}">{{ d.last_activity_date|since }}</td>
+            <td class="tiny">
+              {% if d.next_step %}{{ d.next_step }}
+              {% else %}<span class="badge at_risk">none set</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+        <div class="empty">No open opportunities.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    {% if courses %}
+    <div class="card">
+      <h3>Recommended training</h3>
+      <p class="tiny muted" style="margin-bottom:.7rem">
+        Courses mapped to the signals that fired above. Assigning one puts it on
+        {{ rep.name.split()[0] }}'s plan with the reason attached.
+      </p>
+      {% for c in courses %}
+        <div style="padding:.6rem 0;border-bottom:1px solid var(--line2)">
+          <div class="row" style="justify-content:space-between;align-items:flex-start">
+            <div style="flex:1;min-width:0">
+              <span class="badge brand">{{ c.code }}</span>
+              <b style="margin-left:.3rem">{{ c.title }}</b>
+              <div class="tiny muted" style="margin-top:.2rem">{{ c.summary }}</div>
+            </div>
+            <form method="post" action="{{ url_for('assign_course', rep_id=rep.id, course_id=c.id) }}">
+              <input type="hidden" name="reason" value="Assigned from health signal: {{ c.fixes_signal }}">
+              <button class="btn btn-ghost btn-sm">Assign</button>
+            </form>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3>Certifications</h3>
+      {% for c in certs %}
+        <div style="padding:.5rem 0;border-bottom:1px solid var(--line2)">
+          <div class="row" style="justify-content:space-between">
+            <b class="tiny">{{ c.track_name }}</b>
+            <span class="badge {{ 'strong' if c.status == 'certified' else 'at_risk' if c.status == 'expired' else 'on_track' }}">
+              {{ c.status|replace('_',' ') }}
+            </span>
+          </div>
+          <div class="tiny muted">
+            {% if c.is_mandatory %}Mandatory · {% endif %}
+            {% if c.expires_on %}
+              {{ 'Expired' if c.status == 'expired' else 'Renews' }} {{ c.expires_on|nicedate }}
+            {% else %}Not yet certified{% endif %}
+          </div>
+        </div>
+      {% else %}
+        <p class="tiny muted">No certification records.</p>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <h3>Course plan</h3>
+      {% for e in enrollments %}
+        <div style="padding:.45rem 0;border-bottom:1px solid var(--line2)">
+          <div class="row" style="justify-content:space-between">
+            <span class="tiny"><span class="mono">{{ e.code }}</span> {{ e.title }}</span>
+            <span class="badge {{ 'strong' if e.status == 'complete' else 'watch' if e.status == 'in_progress' else 'neutral' }}">
+              {{ e.status|replace('_',' ') }}{% if e.score %} · {{ e.score }}{% endif %}
+            </span>
+          </div>
+          {% if e.assigned_reason %}
+            <div class="tiny muted">{{ e.assigned_reason }}</div>
+          {% endif %}
+        </div>
+      {% else %}
+        <p class="tiny muted">Nothing assigned.</p>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <h3>Activity — last 8 weeks</h3>
+      <p class="tiny muted" style="margin-bottom:.6rem">Meetings and demos per week.</p>
+      <div style="display:flex;gap:4px;align-items:flex-end;height:70px">
+        {% for w in weeks %}
+          {% set v = w.meetings + w.demos %}
+          <div style="flex:1;text-align:center" title="{{ w.week_start }}: {{ v }}">
+            <div style="background:var(--brand);border-radius:3px 3px 0 0;
+                        height:{{ (v / peak_week * 60)|round|int }}px;min-height:3px"></div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="tiny muted" style="margin-top:.5rem">
+        {{ m.activity.c }} calls · {{ m.activity.e }} emails ·
+        {{ m.activity.m }} meetings · {{ m.activity.dm }} demos (4 wks)
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Onboard {{ a.cand_name }}{% endblock %}
+{% block crumb %}<a href="{{ url_for('application_detail', app_id=a.id) }}">{{ a.cand_name }}</a> / Onboard{% endblock %}
+
+{% block content %}
+<h1>Onboard {{ a.cand_name }}</h1>
+<p class="sub">
+  This is the seam between hiring and the floor. Submitting writes {{ a.cand_name.split()[0] }}
+  onto the org chart, sets a ramp window, and enrolls every mandatory certification
+  track — so the new seat appears on the dashboard graded against a ramp curve instead
+  of showing up as an unexplained zero.
+</p>
+
+<div class="grid split">
+  <form method="post" class="card">
+    <h3>New seat</h3>
+    <div class="grid g2">
+      <div>
+        <label>Name</label>
+        <input value="{{ a.cand_name }}" disabled>
+      </div>
+      <div>
+        <label>Email</label>
+        <input value="{{ a.email }}" disabled>
+      </div>
+      <div>
+        <label>Team</label>
+        <input value="{{ a.team }}" disabled>
+      </div>
+      <div>
+        <label>Segment</label>
+        <input value="{{ a.segment }}" disabled>
+      </div>
+      <div>
+        <label>Annual quota</label>
+        <input value="${{ '{:,}'.format(a.quota_annual) }}" disabled>
+      </div>
+      <div>
+        <label>Region</label>
+        <input value="{{ a.region }}" disabled>
+      </div>
+      <div>
+        <label for="start_date">Start date</label>
+        <input id="start_date" type="date" name="start_date" value="{{ default_start }}">
+      </div>
+      <div>
+        <label for="ramp_days">Ramp period (days)</label>
+        <select id="ramp_days" name="ramp_days">
+          <option value="60">60 days — SMB</option>
+          <option value="90">90 days — Mid-Market</option>
+          <option value="120" selected>120 days — Enterprise</option>
+          <option value="180">180 days — Strategic</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:1.2rem">
+      <button class="btn btn-green">Add to org chart</button>
+      <a class="btn btn-ghost" href="{{ url_for('application_detail', app_id=a.id) }}">Cancel</a>
+    </div>
+  </form>
+
+  <div>
+    <div class="card">
+      <h3>Auto-enrolled certifications</h3>
+      <p class="tiny muted">Every mandatory track, assigned on the start date.</p>
+      {% for t in tracks %}
+        <div style="padding:.5rem 0;border-bottom:1px solid var(--line2)">
+          <b class="tiny">{{ t.name }}</b>
+          <span class="badge at_risk">mandatory</span>
+          <div class="tiny muted">Valid {{ t.valid_months }} months · {{ t.summary }}</div>
+        </div>
+      {% endfor %}
+    </div>
+    <div class="card">
+      <h3>What the ramp window does</h3>
+      <p class="tiny muted">
+        During ramp, the health engine grades attainment against a fraction of quarter
+        pace proportional to how far into ramp the rep is — a rep 30 days into a
+        120-day ramp is measured against a quarter of pace, not all of it. Flagging
+        every new hire as at-risk is how a health score trains managers to ignore it.
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}

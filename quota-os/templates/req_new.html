@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}New requisition{% endblock %}
+{% block crumb %}<a href="{{ url_for('hiring') }}">Hiring</a> / New requisition{% endblock %}
+
+{% block content %}
+<h1>New requisition</h1>
+<p class="sub">
+  These are the knobs the AI posting generator reads. Fill them in honestly — the
+  posting is only as specific as the req behind it.
+</p>
+
+<form method="post" class="card" style="max-width:820px">
+  <div class="grid g2">
+    <div>
+      <label for="title">Title</label>
+      <input id="title" name="title" required placeholder="Enterprise Account Executive — West">
+    </div>
+    <div>
+      <label for="level">Level</label>
+      <select id="level" name="level">
+        <option>SDR</option><option selected>AE</option>
+        <option>Senior AE</option><option>Manager</option>
+      </select>
+    </div>
+    <div>
+      <label for="team">Team</label>
+      <input id="team" name="team" required placeholder="Enterprise West">
+    </div>
+    <div>
+      <label for="segment">Segment</label>
+      <select id="segment" name="segment">
+        <option>SMB</option><option selected>Mid-Market</option><option>Enterprise</option>
+      </select>
+    </div>
+    <div>
+      <label for="region">Region</label>
+      <input id="region" name="region" required placeholder="West">
+    </div>
+    <div>
+      <label for="hiring_manager_id">Hiring manager</label>
+      <select id="hiring_manager_id" name="hiring_manager_id">
+        {% for m in managers %}<option value="{{ m.id }}">{{ m.name }} — {{ m.title }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="quota_annual">Annual quota ($)</label>
+      <input id="quota_annual" name="quota_annual" type="number" value="900000">
+    </div>
+    <div>
+      <label for="comp_base">Base salary ($)</label>
+      <input id="comp_base" name="comp_base" type="number" value="105000">
+    </div>
+    <div>
+      <label for="comp_ote">On-target earnings ($)</label>
+      <input id="comp_ote" name="comp_ote" type="number" value="210000">
+    </div>
+  </div>
+
+  <label for="must_haves">Must have — one per line</label>
+  <textarea id="must_haves" name="must_haves" required
+    placeholder="3+ years full-cycle B2B SaaS closing experience&#10;Carried and hit a quota of $750K or more&#10;Demonstrated pipeline generation motion"></textarea>
+
+  <label for="nice_haves">Nice to have — one per line</label>
+  <textarea id="nice_haves" name="nice_haves"
+    placeholder="Sold into healthcare or financial services&#10;MEDDPICC training"></textarea>
+
+  <div class="row" style="margin-top:1.2rem">
+    <button class="btn btn-primary">Create requisition</button>
+    <a class="btn btn-ghost" href="{{ url_for('hiring') }}">Cancel</a>
+    <span class="tiny muted">You'll generate the posting on the next screen.</span>
+  </div>
+</form>
+{% endblock %}

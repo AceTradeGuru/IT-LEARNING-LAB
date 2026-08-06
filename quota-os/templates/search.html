@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}AI resume search{% endblock %}
+{% block crumb %}AI resume search{% endblock %}
+
+{% block content %}
+<h1>AI resume search</h1>
+<p class="sub">
+  Describe the person you want the way you'd describe them to a recruiter. Every
+  resume in the pool is read against that brief and scored on fit — with the
+  evidence that earned the score and the gaps it didn't cover.
+</p>
+
+<form method="post" class="card">
+  <label for="query">Who are you looking for?</label>
+  <textarea id="query" name="query" placeholder="e.g. Enterprise closer who's carried $1M+ into healthcare, long cycles with security review, self-sources most of their pipeline">{{ query }}</textarea>
+  <label for="req_id">Score against a requisition (optional)</label>
+  <select id="req_id" name="req_id">
+    <option value="">No specific req — just rank the pool</option>
+    {% for r in reqs %}
+      <option value="{{ r.id }}" {% if req and req.id == r.id %}selected{% endif %}>{{ r.title }}</option>
+    {% endfor %}
+  </select>
+  <div class="row" style="margin-top:1rem">
+    <button class="btn btn-primary">Search resumes</button>
+    <span class="tiny muted">Running on <b>{{ engine.label }}</b></span>
+  </div>
+</form>
+
+{% if results %}
+  <div class="row" style="justify-content:space-between;margin:1.4rem 0 .6rem">
+    <h2 style="margin:0">{{ results|length }} candidates ranked</h2>
+    <span class="badge {{ 'brand' if engine == 'claude' else 'neutral' }}">
+      ranked by {{ 'Claude' if engine == 'claude' else 'offline heuristics' }}
+    </span>
+  </div>
+
+  {% for item in results %}
+    {% set c = item.c %}{% set r = item.r %}
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="person">
+          <span class="avatar">{{ c.name.split()[0][0] }}{{ c.name.split()[-1][0] }}</span>
+          <div>
+            <span class="nm">{{ c.name }}</span>
+            <span class="badge {{ 'strong' if r.verdict == 'strong' else 'watch' if r.verdict == 'possible' else 'at_risk' }}">{{ r.verdict }}</span>
+            <div class="sub2">
+              {{ c.current_title }} at {{ c.current_company }} · {{ c.years_exp }} years ·
+              {{ c.location }} · sourced via {{ c.source }}
+            </div>
+          </div>
+        </div>
+        <div style="text-align:right;min-width:80px">
+          <div class="score {{ 'strong' if r.score >= 75 else 'on_track' if r.score >= 55 else 'watch' if r.score >= 35 else 'at_risk' }}"
+               style="font-size:1.6rem">{{ r.score }}</div>
+          <div class="tiny muted">match</div>
+        </div>
+      </div>
+
+      <p style="margin:.7rem 0 .5rem">{{ r.reason }}</p>
+
+      <div class="grid g2">
+        <div>
+          <div class="eyebrow" style="margin-bottom:.3rem">Evidence from the resume</div>
+          {% for e in r.evidence %}
+            <div class="answer" style="border-left-color:var(--strong);margin:.3rem 0">{{ e }}</div>
+          {% else %}
+            <p class="tiny muted">Nothing in the resume matched the brief directly.</p>
+          {% endfor %}
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:.3rem">Gaps against the brief</div>
+          {% for g in r.gaps %}
+            <div class="answer" style="border-left-color:var(--watch);margin:.3rem 0">{{ g }}</div>
+          {% else %}
+            <p class="tiny muted">The resume covers everything the brief asked for.</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:.9rem">
+        {% if req %}
+          {% if item.app %}
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('application_detail', app_id=item.app.id) }}">
+              Already in funnel — open</a>
+          {% else %}
+            <form method="post" action="{{ url_for('add_candidate', req_id=req.id, candidate_id=c.id) }}">
+              <input type="hidden" name="score" value="{{ r.score }}">
+              <input type="hidden" name="reason" value="{{ r.reason }}">
+              <button class="btn btn-primary btn-sm">Add to {{ req.title|truncate(28) }}</button>
+            </form>
+          {% endif %}
+        {% else %}
+          <span class="tiny muted">Pick a requisition above to add candidates into a funnel.</span>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

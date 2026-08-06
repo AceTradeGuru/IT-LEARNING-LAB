@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Pipeline{% endblock %}
+{% block crumb %}Pipeline{% endblock %}
+
+{% block content %}
+<h1>Pipeline</h1>
+<p class="sub">
+  Every open opportunity in scope, earliest close first. Rows flag the two things a
+  forecast review actually argues about: deals nobody has touched, and close dates
+  that have already moved once.
+</p>
+
+<form method="get" class="card row" style="gap:.7rem">
+  <label style="margin:0">Rep</label>
+  <select name="rep" onchange="this.form.submit()" style="width:auto;min-width:200px">
+    <option value="">Everyone in scope</option>
+    {% for r in reps %}
+      <option value="{{ r.id }}" {% if selected == r.id|string %}selected{% endif %}>{{ r.name }}</option>
+    {% endfor %}
+  </select>
+  <span class="tiny muted">{{ deals|length }} open deals · {{ quarter }} ends {{ q_end|string|nicedate }}</span>
+</form>
+
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th>Account</th><th>Rep</th><th>Stage</th><th class="num">Amount</th>
+          <th class="num">Prob.</th><th>Close</th><th>Last touch</th><th>Next step</th></tr>
+    </thead>
+    <tbody>
+    {% for d in deals %}
+      {% set slipped = d.close_date > d.close_date_original %}
+      {% set beyond = d.close_date > q_end|string %}
+      <tr>
+        <td><b>{{ d.account }}</b><br><span class="tiny muted">{{ d.segment }} · {{ d.source }}</span></td>
+        <td class="tiny"><a href="{{ url_for('rep_detail', rep_id=d.rep_id) }}">{{ d.rep_name }}</a></td>
+        <td><span class="badge neutral">{{ d.stage|replace('_',' ')|title }}</span></td>
+        <td class="num">{{ d.amount|dollars }}</td>
+        <td class="num tiny">{{ d.probability }}%</td>
+        <td class="tiny">
+          {{ d.close_date|nicedate }}
+          {% if beyond %}<br><span class="badge neutral">next quarter</span>{% endif %}
+          {% if slipped %}<br><span class="badge watch">pushed from {{ d.close_date_original|nicedate }}</span>{% endif %}
+        </td>
+        <td class="tiny">{{ d.last_activity_date|since }}</td>
+        <td class="tiny">
+          {% if d.next_step %}{{ d.next_step }}
+          {% else %}<span class="badge at_risk">none set</span>{% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8"><div class="empty">No open deals in scope.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

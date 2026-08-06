@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Hiring{% endblock %}
+{% block crumb %}Hiring{% endblock %}
+
+{% block content %}
+<div class="row" style="justify-content:space-between">
+  <div>
+    <h1>Hiring</h1>
+    <p class="sub">
+      Requisition to org chart in one loop: write the posting, search the pool,
+      run a scored interview, then onboard the hire onto a ramp plan.
+    </p>
+  </div>
+  <div class="row">
+    <a class="btn btn-ghost" href="{{ url_for('search') }}">AI resume search</a>
+    <a class="btn btn-primary" href="{{ url_for('req_new') }}">New requisition</a>
+  </div>
+</div>
+
+<h2>Requisitions</h2>
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Requisition</th><th>Manager</th><th>Segment</th><th class="num">Quota</th>
+               <th class="num">OTE</th><th>Posting</th><th class="num">In funnel</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for r in reqs %}
+      <tr>
+        <td><a href="{{ url_for('req_detail', req_id=r.id) }}"><b>{{ r.title }}</b></a>
+          <div class="tiny muted">{{ r.level }} · {{ r.region }} · opened {{ r.created_at|since }}</div></td>
+        <td class="tiny">{{ r.manager_name or '—' }}</td>
+        <td class="tiny">{{ r.segment }}</td>
+        <td class="num">{{ r.quota_annual|money }}</td>
+        <td class="num">{{ r.comp_ote|money }}</td>
+        <td>
+          {% if r.posting_md %}
+            <span class="badge {{ 'brand' if r.posting_source == 'claude' else 'neutral' }}">
+              {{ 'Claude' if r.posting_source == 'claude' else 'offline' }}
+            </span>
+          {% else %}<span class="badge watch">not written</span>{% endif %}
+        </td>
+        <td class="num">{{ r.active or 0 }} <span class="muted tiny">/ {{ r.applicants }}</span></td>
+        <td><span class="badge {{ 'strong' if r.status == 'open' else 'neutral' }}">{{ r.status }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<h2>Candidate funnel</h2>
+<div class="board">
+  {% for s in stages %}
+    <div class="col">
+      <h4><span>{{ stage_labels[s] }}</span><span>{{ board[s]|length }}</span></h4>
+      {% for a in board[s] %}
+        <a class="ticket" href="{{ url_for('application_detail', app_id=a.id) }}">
+          <div class="tn">{{ a.cand_name }}</div>
+          <div class="tm">{{ a.current_title }} · {{ a.years_exp }}y</div>
+          <div class="tm" style="margin-top:.25rem">
+            {% if a.match_score %}
+              <span class="badge {{ 'strong' if a.match_score >= 80 else 'watch' if a.match_score >= 55 else 'at_risk' }}">{{ a.match_score }}</span>
+            {% endif %}
+            <span class="muted">{{ a.req_title|truncate(22) }}</span>
+          </div>
+        </a>
+      {% else %}
+        <div class="tiny muted" style="padding:.4rem;text-align:center">—</div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+</div>
+
+{% if board['rejected'] %}
+  <h2>Rejected</h2>
+  <div class="card">
+    {% for a in board['rejected'] %}
+      <div class="row" style="justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--line2)">
+        <a href="{{ url_for('application_detail', app_id=a.id) }}">{{ a.cand_name }}</a>
+        <span class="tiny muted">{{ a.req_title }}
+          {% if a.match_score %}· match {{ a.match_score }}{% endif %}</span>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}

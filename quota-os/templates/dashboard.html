@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block crumb %}{{ org.quarter }} — {{ 'My team' if scoped else 'Whole org' }}{% endblock %}
+
+{% block content %}
+<h1>{{ me.name }}{% if scoped %}'s team{% endif %}</h1>
+<p class="sub">
+  {{ org.quarter }} is {{ org.pace_pct }}% elapsed. {{ org.headcount }} quota-carrying
+  {{ 'rep' if org.headcount == 1 else 'reps' }}, {{ org.bands.at_risk + org.bands.watch }}
+  needing attention.
+  {% if org.starting_soon %}
+    {{ org.starting_soon|length }} more
+    {{ 'seat starts' if org.starting_soon|length == 1 else 'seats start' }} shortly and
+    {{ 'is' if org.starting_soon|length == 1 else 'are' }} excluded from these numbers:
+    {% for e in org.starting_soon %}<a href="{{ url_for('rep_detail', rep_id=e.rep.id) }}">{{ e.rep.name }}</a>{{ ', ' if not loop.last }}{% endfor %}.
+  {% endif %}
+</p>
+
+<!-- The four numbers that decide whether the quarter is fine. Attainment carries a
+     pace marker, because 40% attained is either great or catastrophic depending on
+     what day it is. -->
+<div class="grid g4" style="margin-bottom:1rem">
+  <div class="kpi">
+    <div class="lbl">Closed / Quota</div>
+    <div class="num">{{ org.closed|money }}</div>
+    <div class="note">of {{ org.quota|money }} — {{ org.attainment_pct }}% attained</div>
+    <div class="track paced">
+      <i class="{{ 'strong' if org.attainment_pct >= org.pace_pct else 'watch' }}"
+         style="width:{{ [org.attainment_pct, 100]|min }}%"></i>
+      <span class="pin" style="left:{{ org.pace_pct }}%" title="Quarter pace"></span>
+    </div>
+    <div class="note tiny" style="margin-top:.35rem">
+      Marker shows {{ org.pace_pct }}% quarter pace
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">In-quarter pipeline</div>
+    <div class="num">{{ org.pipeline|money }}</div>
+    <div class="note">
+      {% if org.coverage %}{{ org.coverage }}x coverage on {{ org.remaining|money }} remaining
+      {% else %}Quota met{% endif %}
+    </div>
+    <div class="track">
+      <i class="{{ 'strong' if org.coverage and org.coverage >= 3 else 'watch' if org.coverage and org.coverage >= 2 else 'at_risk' }}"
+         style="width:{{ [(org.coverage or 4) / 4 * 100, 100]|min }}%"></i>
+    </div>
+    <div class="note tiny" style="margin-top:.35rem">3.0x is the target</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Average rep health</div>
+    <div class="num">{{ org.avg_score }}<span style="font-size:.9rem;color:var(--muted)">/100</span></div>
+    <div class="note">
+      {{ org.bands.strong }} strong · {{ org.bands.on_track }} on track ·
+      {{ org.bands.watch }} watch · {{ org.bands.at_risk }} at risk
+    </div>
+    <div class="track" style="display:flex;gap:2px;background:none">
+      {% for k in ['strong','on_track','watch','at_risk'] %}
+        {% if org.bands[k] %}
+          <i class="{{ k }}" style="width:{{ org.bands[k] / org.headcount * 100 }}%"></i>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Certification exposure</div>
+    <div class="num {{ 'score at_risk' if lapsed else 'score strong' }}">{{ lapsed|length }}</div>
+    <div class="note">
+      {% if lapsed %}
+        {{ 'rep is' if lapsed|length == 1 else 'reps are' }} selling on a lapsed mandatory
+        certification
+      {% else %}Every mandatory certification current{% endif %}
+    </div>
+    {% for l in lapsed[:2] %}
+      <div class="note tiny" style="margin-top:.3rem">
+        <a href="{{ url_for('rep_detail', rep_id=l.id) }}">{{ l.name }}</a> — {{ l.track }}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid split">
+  <div>
+    <!-- Sorted worst-first on purpose. A dashboard that opens on the top performer
+         is a dashboard that gets read once. -->
+    <div class="card pad0">
+      <div class="cardhead">
+        <h2>Needs attention</h2>
+        <div class="spacer"></div>
+        <a class="tiny" href="{{ url_for('org_view') }}">See all {{ org.headcount }} reps →</a>
+      </div>
+      {% if org.at_risk %}
+      <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Rep</th><th class="num">Health</th><th class="num">Attained</th>
+              <th class="num">Coverage</th><th>Why</th></tr>
+        </thead>
+        <tbody>
+        {% for e in org.at_risk %}
+          {% set top = e.signals[0] %}
+          <tr>
+            <td>
+              <a class="person" href="{{ url_for('rep_detail', rep_id=e.rep.id) }}">
+                <span class="avatar">{{ e.rep.name.split()[0][0] }}{{ e.rep.name.split()[-1][0] }}</span>
+                <span><span class="nm">{{ e.rep.name }}</span>
+                  <span class="sub2" style="display:block">{{ e.rep.team }}</span></span>
+              </a>
+            </td>
+            <td class="num"><span class="score {{ e.band }}">{{ e.score }}</span>
+              <span class="badge {{ e.band }}" style="margin-left:.35rem">{{ e.band_label }}</span></td>
+            <td class="num">{{ e.metrics.attainment_pct }}%</td>
+            <td class="num">{{ e.metrics.coverage if e.metrics.coverage is not none else '—' }}{{ 'x' if e.metrics.coverage is not none }}</td>
+            <td class="tiny">
+              <b>{{ top.label }}</b><br>
+              <span class="muted">{{ top.detail }}</span>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+        <div class="empty">Nobody is in the watch or at-risk band. Enjoy it.</div>
+      {% endif %}
+    </div>
+
+    {% if teams %}
+    <div class="card pad0">
+      <div class="cardhead"><h2>Teams</h2></div>
+      <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Manager</th><th class="num">Attained</th><th class="num">Closed</th>
+              <th class="num">Pipeline</th><th class="num">Coverage</th>
+              <th class="num">Avg health</th><th>Band mix</th></tr>
+        </thead>
+        <tbody>
+        {% for t in teams %}
+          <tr>
+            <td><b>{{ t.manager.name }}</b><br><span class="tiny muted">{{ t.manager.team }}</span></td>
+            <td class="num">
+              <b>{{ t.org.attainment_pct }}%</b>
+              <div class="track paced" style="width:80px;margin-left:auto">
+                <i class="{{ 'strong' if t.org.attainment_pct >= org.pace_pct else 'watch' }}"
+                   style="width:{{ [t.org.attainment_pct,100]|min }}%"></i>
+                <span class="pin" style="left:{{ org.pace_pct }}%"></span>
+              </div>
+            </td>
+            <td class="num">{{ t.org.closed|money }}</td>
+            <td class="num">{{ t.org.pipeline|money }}</td>
+            <td class="num">{{ t.org.coverage if t.org.coverage else '—' }}{{ 'x' if t.org.coverage }}</td>
+            <td class="num"><span class="score {{ 'strong' if t.org.avg_score >= 80 else 'on_track' if t.org.avg_score >= 60 else 'watch' }}">{{ t.org.avg_score }}</span></td>
+            <td>
+              {% for k, lbl in [('strong','S'),('on_track','OT'),('watch','W'),('at_risk','AR')] %}
+                {% if t.org.bands[k] %}<span class="badge {{ k }}">{{ t.org.bands[k] }} {{ lbl }}</span> {% endif %}
+              {% endfor %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Open pipeline by stage</h3>
+      <p class="tiny muted" style="margin-bottom:.8rem">All open deals, any close date.</p>
+      {% for f in funnel %}
+        <div class="funnelrow">
+          <div class="fl">{{ f.label }}</div>
+          <div class="fb"><i style="width:{{ f.amount / peak * 100 }}%"></i></div>
+          <div class="fv">{{ f.amount|money }} <span class="muted tiny">({{ f.count }})</span></div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:.7rem">
+        <h3 style="margin:0">Open requisitions</h3>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('req_new') }}">New req</a>
+      </div>
+      {% for r in open_reqs %}
+        <div style="padding:.6rem 0;border-bottom:1px solid var(--line2)">
+          <a href="{{ url_for('req_detail', req_id=r.id) }}"><b>{{ r.title }}</b></a>
+          <div class="tiny muted">
+            {{ r.segment }} · {{ r.quota_annual|money }} quota · {{ r.applicants }} in funnel
+          </div>
+        </div>
+      {% else %}
+        <p class="tiny muted">No open requisitions.</p>
+      {% endfor %}
+      <div style="margin-top:.8rem">
+        <a class="btn btn-primary btn-sm" href="{{ url_for('search') }}">Search resumes with AI</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
