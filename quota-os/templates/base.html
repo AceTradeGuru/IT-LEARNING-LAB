@@ -283,6 +283,8 @@
         <a href="{{ url_for('candidates') }}" class="{{ 'on' if request.endpoint == 'candidates' }}">Candidate pool</a>
       {% endif %}
       {% if has_role('admin') %}
+        <div class="navgroup">Data</div>
+        <a href="{{ url_for('data_import') }}" class="{{ 'on' if request.endpoint in ('data_import','import_preview') }}">Import from CRM</a>
         <div class="navgroup">Settings</div>
         <a href="{{ url_for('settings_audit') }}" class="{{ 'on' if request.endpoint == 'settings_audit' }}">AI decision log</a>
         {% if has_role('owner') %}

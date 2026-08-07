@@ -40,7 +40,9 @@ class Config:
 
     # Requests larger than this are rejected before they reach a view. Resume text
     # is the only large field the app accepts.
-    MAX_CONTENT_LENGTH = int(os.environ.get("MAX_UPLOAD_KB", "512")) * 1024
+    # 4 MB covers a CSV export of roughly 30-40k opportunities, which is a large
+    # Salesforce org. Raise it if a customer's export is rejected.
+    MAX_CONTENT_LENGTH = int(os.environ.get("MAX_UPLOAD_KB", "4096")) * 1024
 
     # Per-org, per-hour ceilings on the model-backed endpoints. The cost of an AI
     # feature is unbounded without one, because a loop costs the customer nothing.

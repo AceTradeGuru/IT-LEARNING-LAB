@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}Import preview{% endblock %}
+{% block crumb %}<a href="{{ url_for('data_import') }}">Import</a> / {{ imp.filename }}{% endblock %}
+
+{% block content %}
+<div class="row" style="justify-content:space-between;align-items:flex-start">
+  <div>
+    <h1>{{ imp.filename }}</h1>
+    <p class="sub" style="margin-bottom:.4rem">
+      Detected as <span class="badge brand">{{ plan.source }}</span>
+      · {{ plan.total }} data rows · uploaded {{ imp.created_at|replace('T',' ') }}
+    </p>
+  </div>
+  <span class="badge {{ 'strong' if imp.status == 'applied' else 'watch' }}"
+        style="font-size:.8rem;padding:.3rem .7rem">{{ imp.status }}</span>
+</div>
+
+{% if imp.status == 'applied' and report %}
+  <div class="card" style="border-color:var(--strong)">
+    <h3>Applied</h3>
+    <p class="tiny muted">
+      {{ report.created }} deals created · {{ report.updated }} updated ·
+      {{ report.unchanged }} already current · {{ report.skipped }} skipped
+      {% if report.reps_created %} · {{ report.reps_created }} reps created{% endif %}.
+      Applied {{ imp.applied_at|replace('T',' ') }}.
+    </p>
+    <div class="row" style="margin-top:.7rem">
+      <a class="btn btn-primary btn-sm" href="{{ url_for('dashboard') }}">See the dashboard</a>
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('pipeline') }}">See the pipeline</a>
+    </div>
+  </div>
+{% endif %}
+
+<!-- Counts first: this is the number a person checks before clicking apply. -->
+<div class="grid g4" style="margin-bottom:1rem">
+  <div class="kpi">
+    <div class="lbl">Will create</div>
+    <div class="num" style="color:var(--strong)">{{ plan.creates|length }}</div>
+    <div class="note">new deals</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Will update</div>
+    <div class="num" style="color:var(--on_track)">{{ plan.changed_updates|length }}</div>
+    <div class="note">{{ plan.updates|length - plan.changed_updates|length }} already current</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Will skip</div>
+    <div class="num {{ 'score at_risk' if plan.skips }}">{{ plan.skips|length }}</div>
+    <div class="note">see reasons below</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Unknown owners</div>
+    <div class="num {{ 'score watch' if plan.unmatched_owners }}">{{ plan.unmatched_owners|length }}</div>
+    <div class="note">not reps in QuotaOS</div>
+  </div>
+</div>
+
+{% if plan.unmatched_owners or plan.unknown_stages %}
+<div class="grid g2">
+  {% if plan.unmatched_owners %}
+  <div class="card" style="border-color:var(--watch)">
+    <h3>Owners with no matching rep</h3>
+    <p class="tiny muted">
+      Matched on email first, then on exact name. Their deals are skipped unless you
+      create the reps.
+    </p>
+    <div style="margin:.6rem 0">
+      {% for name, n in plan.unmatched_owners.items() %}
+        <div class="row tiny" style="justify-content:space-between;padding:.25rem 0;border-bottom:1px solid var(--line2)">
+          <span>{{ name }}</span><span class="muted">{{ n }} deal{{ 's' if n != 1 }}</span>
+        </div>
+      {% endfor %}
+    </div>
+    {% if imp.status != 'applied' %}
+      <a class="btn {{ 'btn-dark' if create_reps else 'btn-ghost' }} btn-sm"
+         href="{{ url_for('import_preview', import_id=imp.id, create_reps='0' if create_reps else '1') }}">
+        {{ 'Do not create them' if create_reps else 'Create these reps on import' }}
+      </a>
+      {% if create_reps %}
+        <p class="tiny muted" style="margin-top:.5rem">
+          They'll be created with zero quota and no manager, so they won't distort
+          org attainment until you set those.
+        </p>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if plan.unknown_stages %}
+  <div class="card" style="border-color:var(--watch)">
+    <h3>Stages we don't recognize</h3>
+    <p class="tiny muted">
+      These don't match a default Salesforce or HubSpot stage, so their rows are
+      skipped rather than guessed into a bucket. QuotaOS stages are:
+      {% for s in our_stages %}<span class="mono">{{ s }}</span>{{ ', ' if not loop.last }}{% endfor %}.
+    </p>
+    <div style="margin-top:.6rem">
+      {% for st, n in plan.unknown_stages.items() %}
+        <div class="row tiny" style="justify-content:space-between;padding:.25rem 0;border-bottom:1px solid var(--line2)">
+          <span class="mono">{{ st }}</span><span class="muted">{{ n }} row{{ 's' if n != 1 }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if plan.changed_updates %}
+<h2>Changes to existing deals ({{ plan.changed_updates|length }})</h2>
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Account</th><th>Field</th><th>Currently</th><th>Becomes</th><th>Original close</th></tr></thead>
+    <tbody>
+    {% for u in plan.changed_updates[:40] %}
+      {% for field, pair in u.changes.items() %}
+      <tr>
+        <td class="tiny">{% if loop.first %}<b>{{ u.account or u.name }}</b>{% endif %}</td>
+        <td class="tiny"><span class="badge neutral">{{ field|replace('_',' ') }}</span></td>
+        <td class="tiny muted">{{ pair[0] }}</td>
+        <td class="tiny"><b>{{ pair[1] }}</b></td>
+        <td class="tiny muted">
+          {% if loop.first %}
+            {{ u.close_date_original }}
+            {% if u.close_date_original != u.close_date.isoformat() %}
+              <span class="badge watch">slipped</span>
+            {% endif %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+<p class="tiny muted">
+  The original close date is never overwritten — that's the column your CRM doesn't
+  keep, and it's what makes the slippage signal work.
+  {% if plan.changed_updates|length > 40 %}Showing the first 40 changed deals.{% endif %}
+</p>
+{% endif %}
+
+<h2>New deals ({{ plan.creates|length }})</h2>
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Account</th><th>Owner</th><th class="num">Amount</th><th>Stage</th>
+               <th>Close</th><th>Next step</th><th class="num">Row</th></tr></thead>
+    <tbody>
+    {% for c in plan.creates[:50] %}
+      <tr>
+        <td class="tiny"><b>{{ c.account or c.name }}</b></td>
+        <td class="tiny">{{ c.owner_name or c.owner_email or '—' }}</td>
+        <td class="num">{{ c.amount|dollars }}</td>
+        <td><span class="badge neutral">{{ c.stage|replace('_',' ')|title }}</span>
+          {% if c.stage_raw and c.stage_raw|lower != c.stage %}
+            <div class="tiny muted">from “{{ c.stage_raw }}”</div>
+          {% endif %}
+        </td>
+        <td class="tiny">{{ c.close_date.isoformat() }}</td>
+        <td class="tiny muted">{{ c.next_step|truncate(30) if c.next_step else '—' }}</td>
+        <td class="num tiny muted">{{ c._row }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7"><div class="empty">Nothing new to create from this file.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% if plan.creates|length > 50 %}
+  <p class="tiny muted">Showing the first 50 of {{ plan.creates|length }}.</p>
+{% endif %}
+
+{% if plan.skips %}
+<h2>Skipped rows ({{ plan.skips|length }})</h2>
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th class="num">Row</th><th>Account</th><th>Why it was skipped</th></tr></thead>
+    <tbody>
+    {% for s in plan.skips[:40] %}
+      <tr>
+        <td class="num tiny muted">{{ s._row }}</td>
+        <td class="tiny">{{ s.account or s.name or '—' }}</td>
+        <td class="tiny">
+          {% for p in s.problems %}<span class="badge at_risk">{{ p }}</span> {% endfor %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% if plan.skips|length > 40 %}
+  <p class="tiny muted">Showing the first 40 of {{ plan.skips|length }}.</p>
+{% endif %}
+{% endif %}
+
+{% if imp.status != 'applied' %}
+<div class="card row" style="justify-content:space-between;margin-top:1.2rem">
+  <span class="tiny muted" style="max-width:60ch">
+    Nothing has been written yet. Applying creates {{ plan.creates|length }} deals and
+    updates {{ plan.changed_updates|length }}{% if create_reps and plan.new_reps %},
+    and creates {{ plan.new_reps|length }} reps{% endif %}.
+  </span>
+  <div class="row">
+    <form method="post" action="{{ url_for('import_discard', import_id=imp.id) }}" class="inline">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button class="btn btn-red btn-sm">Discard upload</button>
+    </form>
+    <form method="post" action="{{ url_for('import_apply', import_id=imp.id) }}" class="inline">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="create_reps" value="{{ '1' if create_reps else '0' }}">
+      <button class="btn btn-primary">Apply import</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<details style="margin-top:1rem">
+  <summary class="tiny muted" style="cursor:pointer">Columns found in this file ({{ headers|length }})</summary>
+  <div class="card" style="margin-top:.5rem">
+    <div class="tiny mono muted">{{ headers|join('  ·  ') }}</div>
+  </div>
+</details>
+{% endblock %}

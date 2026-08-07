@@ -178,7 +178,7 @@ deal in the database was written by the seed script. Specifically missing:
 | Activity logging | `activities` holds weekly rollups only, and nothing writes them |
 | Notes, tasks, attachments | The daily surface a rep actually lives in |
 | Email and calendar capture | The reason reps tolerate a CRM at all |
-| Salesforce / HubSpot import | Without it nobody can switch to you |
+| ~~Salesforce / HubSpot import~~ | **Built.** See the Import section in the README. |
 | Custom fields | The first question every CRM buyer asks |
 | Reporting and forecast rollups | What the VP signs the contract for |
 
@@ -192,9 +192,10 @@ The differentiated part is already built. The commodity part is not. Leading wit
 the commodity part means competing head-on with a twenty-year-old product on its
 strongest ground, with none of your advantage visible.
 
-1. **Land as a layer.** Import from Salesforce/HubSpot (CSV first, API later) and
-   sell the health engine, certification compliance, and the hiring loop — the
-   things they cannot get from their CRM. Low switching cost, so the deal is easy.
+1. **Land as a layer.** ✅ **Done — CSV import ships.** Sell the health engine,
+   certification compliance, and the hiring loop on top of their existing CRM. Low
+   switching cost, so the deal is easy. (API-based sync, so it refreshes nightly
+   instead of by hand, is the natural follow-up.)
 2. **Own the daily workflow.** Add deal editing, notes, and activity capture *in
    QuotaOS*. Once reps update deals here rather than in Salesforce, you are the
    system of record in practice regardless of which one is nominally authoritative.

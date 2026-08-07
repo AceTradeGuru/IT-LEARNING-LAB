@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Import from Salesforce or HubSpot{% endblock %}
+{% block crumb %}Import{% endblock %}
+
+{% block content %}
+<h1>Import from Salesforce or HubSpot</h1>
+<p class="sub">
+  Export your opportunities or deals as CSV and drop the file here. QuotaOS reads
+  the header row, works out which system it came from, maps the stages onto ours,
+  and shows you exactly what it would create, update, and skip —
+  <b>before anything is written</b>.
+</p>
+
+<div class="grid split">
+  <form method="post" enctype="multipart/form-data" class="card">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <h3>Upload an export</h3>
+    <label for="file">CSV file</label>
+    <input id="file" name="file" type="file" accept=".csv,text/csv" required>
+    <p class="tiny muted" style="margin-top:.5rem">
+      Up to 4 MB — roughly 30,000 opportunities. CSV only; export from Excel as CSV
+      if your download is .xlsx.
+    </p>
+    <button class="btn btn-primary" style="margin-top:1rem">Upload and preview</button>
+  </form>
+
+  <div class="card">
+    <h3>How to get the file</h3>
+    <div class="tiny" style="line-height:1.7">
+      <b>Salesforce</b><br>
+      Reports → New Report → Opportunities → run it → <b>Export</b> → Details Only,
+      CSV. Include at minimum <span class="mono">Opportunity ID</span>,
+      <span class="mono">Account Name</span>, <span class="mono">Amount</span>,
+      <span class="mono">Stage</span>, <span class="mono">Close Date</span>, and
+      <span class="mono">Opportunity Owner</span>.
+      <br><br>
+      <b>HubSpot</b><br>
+      Sales → Deals → the ⋯ menu → <b>Export</b> → CSV. Include
+      <span class="mono">Record ID</span>, <span class="mono">Deal Name</span>,
+      <span class="mono">Amount</span>, <span class="mono">Deal Stage</span>,
+      <span class="mono">Close Date</span>, and <span class="mono">Deal owner</span>.
+    </div>
+  </div>
+</div>
+
+<div class="card" style="border-color:var(--brand)">
+  <h3>Why importing twice is a feature</h3>
+  <p class="tiny muted" style="max-width:76ch">
+    No CRM export contains the date a deal was <em>originally</em> forecast to close
+    — only where it stands today. So the first import records the current close date
+    as the original, and nothing looks slipped. From the second import onward,
+    QuotaOS keeps that original while the current date moves, which is how a deal
+    that has been pushed three times becomes visible here and never was in the
+    system it came from. Deals are matched on their Salesforce or HubSpot record id,
+    so re-importing the same export updates rather than duplicates.
+  </p>
+  {% if imported %}
+    <p class="tiny" style="margin-top:.5rem">
+      <b>{{ imported }}</b> deals in QuotaOS are currently linked to an external
+      record, and will update in place on your next import.
+    </p>
+  {% endif %}
+</div>
+
+<h2>Import history</h2>
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>When</th><th>File</th><th>Source</th><th>Status</th>
+               <th class="num">Created</th><th class="num">Updated</th>
+               <th class="num">Skipped</th><th>By</th><th></th></tr></thead>
+    <tbody>
+    {% for h in history %}
+      {% set r = h.row %}
+      <tr>
+        <td class="tiny muted" style="white-space:nowrap">{{ r.created_at|replace('T',' ') }}</td>
+        <td class="tiny">{{ r.filename }}</td>
+        <td><span class="badge neutral">{{ r.source }}</span></td>
+        <td><span class="badge {{ 'strong' if r.status == 'applied' else 'watch' if r.status == 'preview' else 'neutral' }}">{{ r.status }}</span></td>
+        <td class="num tiny">{{ h.report.created if h.report else '—' }}</td>
+        <td class="num tiny">{{ h.report.updated if h.report else '—' }}</td>
+        <td class="num tiny">{{ h.report.skipped if h.report else '—' }}</td>
+        <td class="tiny">{{ r.user_name or '—' }}</td>
+        <td><a class="btn btn-ghost btn-sm" href="{{ url_for('import_preview', import_id=r.id) }}">Open</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9"><div class="empty">No imports yet.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}
