@@ -16,8 +16,10 @@ from datetime import timedelta
 
 from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    session, url_for)
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import db
+import security
 from api import api as api_blueprint
 from ingest import resolve_carrier
 from auth import (consume_check, create_organization, email_problem,
@@ -26,6 +28,7 @@ from auth import (consume_check, create_organization, email_problem,
 from config import load
 from queries import carrier_staleness, network_stats
 from risk_engine import evaluate, normalize_phone, run_check
+from security import client_ip, csrf_token, csrf_valid, limited
 
 cfg = load()
 
@@ -38,6 +41,13 @@ app.config.update(
     MAX_CONTENT_LENGTH=cfg.MAX_CONTENT_LENGTH,
     PERMANENT_SESSION_LIFETIME=timedelta(days=14),
 )
+
+# Only unwrap forwarded headers when a proxy count is configured. Applied
+# unconditionally, this would let any caller spoof their own IP.
+if cfg.TRUSTED_PROXY_HOPS:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=cfg.TRUSTED_PROXY_HOPS,
+                            x_proto=cfg.TRUSTED_PROXY_HOPS, x_host=0, x_prefix=0)
+
 app.register_blueprint(api_blueprint)
 
 logging.basicConfig(
@@ -183,11 +193,38 @@ def attach_identity():
         load_current(conn)
 
 
+@app.before_request
+def enforce_csrf():
+    """
+    Reject unsafe browser requests without the session's CSRF token.
+
+    Blanket-enforced here rather than per route: an opt-in decorator protects
+    only the endpoints someone remembered to decorate, and the one that gets
+    forgotten is the one that matters. The API is exempt because bearer-token
+    endpoints are not CSRF-able — browsers never attach Authorization headers
+    on their own.
+    """
+    if request.blueprint == "api" or request.method not in security.UNSAFE_METHODS:
+        return
+    if not csrf_valid():
+        log.warning("csrf rejected path=%s ip=%s", request.path, client_ip())
+        return render_template(
+            "error.html", code=400,
+            message="That form expired or came from somewhere unexpected. "
+                    "Go back, reload the page, and try again."), 400
+
+
+@app.after_request
+def secure_headers(response):
+    return security.apply_headers(response, cfg.IS_PRODUCTION)
+
+
 @app.context_processor
 def inject_identity():
     quota = quota_state(g.org) if g.org else (0, None, False)
     return {"current_user": g.user, "current_org": g.org,
-            "quota_used": quota[0], "quota_limit": quota[1]}
+            "quota_used": quota[0], "quota_limit": quota[1],
+            "csrf_token": csrf_token}
 
 
 # ---------- operational ----------
@@ -235,12 +272,23 @@ def signup():
         return render_template("signup.html", form=f), 400
 
     with db.connection() as conn:
+        allowed, retry = limited(conn, "signup_ip", client_ip())
+        if not allowed:
+            security.record(conn, "signup", target=email, outcome="denied",
+                            detail={"reason": "rate_limited"})
+            return render_template(
+                "error.html", code=429,
+                message="Too many accounts created from this network. "
+                        f"Try again in {retry // 60 + 1} minutes."), 429
+
         user, error = create_organization(
             conn, company, email, password, clean_text(f.get("full_name")))
         if error:
             flash(error)
             return render_template("signup.html", form=f), 400
         login_user(conn, user)
+        security.record(conn, "signup", target=email,
+                        org_id=user["org_id"], user_id=user["id"])
 
     log.info("signup org=%s user=%s", user["org_id"], user["id"])
     flash("Account created. You're on the Starter plan — 250 checks a month.")
@@ -258,14 +306,30 @@ def login():
     email = clean_text(f.get("email")).lower()
 
     with db.connection() as conn:
+        # Two keys, because either alone is trivially evaded: a botnet rotates
+        # IPs against one account, and one host sprays many accounts from one IP.
+        ip_ok, retry = limited(conn, "login_ip", client_ip())
+        email_ok, retry_email = limited(conn, "login_email", email or "-")
+        if not (ip_ok and email_ok):
+            security.record(conn, "login", target=email, outcome="denied",
+                            detail={"reason": "rate_limited"})
+            return render_template(
+                "error.html", code=429,
+                message="Too many sign-in attempts. Try again in "
+                        f"{max(retry, retry_email) // 60 + 1} minutes."), 429
+
         user = conn.execute(
             "SELECT * FROM users WHERE lower(email) = %s", (email,)).fetchone()
         # One message for both cases: distinguishing them turns the login form
         # into an oracle for which email addresses have accounts here.
         if user is None or not verify_password(user["password_hash"], f.get("password") or ""):
+            security.record(conn, "login", target=email, outcome="failed")
             flash("Email or password is incorrect.")
             return render_template("login.html", next=f.get("next", "")), 401
+
         login_user(conn, user)
+        security.record(conn, "login", target=email,
+                        org_id=user["org_id"], user_id=user["id"])
 
     return redirect(safe_next(f.get("next", ""), "check"))
 
@@ -306,6 +370,7 @@ def create_api_key():
             """INSERT INTO api_keys (org_id, name, key_prefix, key_hash, created_by)
                VALUES (%s, %s, %s, %s, %s)""",
             (g.org["id"], name, prefix, key_hash, g.user["user_id"]))
+        security.record(conn, "api_key.create", target=prefix)
 
     # Carried in the session, not the URL: a key in a query string ends up in
     # browser history, proxy logs, and the Referer header of the next request.
@@ -323,6 +388,8 @@ def revoke_api_key(key_id):
             """UPDATE api_keys SET revoked_at = now()
                WHERE id = %s AND org_id = %s AND revoked_at IS NULL
                RETURNING id""", (key_id, g.org["id"])).fetchone()
+        if updated:
+            security.record(conn, "api_key.revoke", target=str(key_id))
     if updated:
         log.info("api_key revoked org=%s key=%s", g.org["id"], key_id)
         flash("API key revoked. Any integration using it will start failing immediately.")
@@ -362,6 +429,15 @@ def check():
     load_value = parse_money(f.get("load_value"))
 
     with db.connection() as conn:
+        # Separate from the plan quota: that caps the month, this caps the
+        # minute. A scraper burning a Pro allowance in ten seconds is not a
+        # customer using the product.
+        allowed, retry = limited(conn, "check_org", g.org["id"])
+        if not allowed:
+            return render_template(
+                "error.html", code=429,
+                message=f"Too many checks at once. Try again in {retry} seconds."), 429
+
         check_id, result = run_check(
             conn, g.org["id"], mc_number,
             clean_text(f.get("contact_email")), clean_text(f.get("contact_phone")),
@@ -451,13 +527,27 @@ def report():
     reported_phone = normalize_phone(f.get("reported_phone"))
 
     with db.connection() as conn:
-        conn.execute(
+        allowed, retry = limited(conn, "report_org", g.org["id"])
+        if not allowed:
+            security.record(conn, "fraud_report.create", target=mc_number,
+                            outcome="denied", detail={"reason": "rate_limited"})
+            flash("That's a lot of reports at once. Give it an hour, or contact "
+                  "us if you genuinely have this many.")
+            return redirect(url_for("report"))
+
+        report_id = conn.execute(
             """INSERT INTO fraud_reports (org_id, mc_number, reported_email,
                  reported_phone, incident_type, amount_lost_usd, notes)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (g.org["id"], mc_number, reported_email or None,
              reported_phone or None, incident, parse_money(f.get("amount_lost")) or 0,
-             clean_text(f.get("notes"), MAX_NOTES) or None))
+             clean_text(f.get("notes"), MAX_NOTES) or None)).fetchone()["id"]
+
+        # The audit entry that matters most. This is one company publishing a
+        # fraud accusation against another by name; when a carrier disputes it,
+        # who filed it and from where is the entire defense.
+        security.record(conn, "fraud_report.create", target=mc_number,
+                        detail={"report_id": report_id, "incident_type": incident})
 
     log.info("fraud_report org=%s mc=%s type=%s", g.org["id"], mc_number, incident)
 

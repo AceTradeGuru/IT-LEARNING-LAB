@@ -131,7 +131,9 @@ The signals, by source:
 | `auth.py` | Passwords, sessions, API keys, tenancy, plan metering. |
 | `api.py` | The JSON API. |
 | `ingest.py` | Carrier data sources, on-demand lookup, and the nightly refresh. |
+| `security.py` | CSRF, rate limiting, audit trail, response headers. |
 | `test_ingest.py` | Ingest regression tests against faked sources. |
+| `test_security.py` | Security regression tests. |
 | `queries.py` | Read queries shared across routes. |
 | `app.py` | Flask routes, input validation, error handling. |
 | `seed.py` | Development data — and the verdict regression test. |
@@ -201,6 +203,48 @@ the product on day one. So:
 An outage produces "verify this by hand", never an accusation. A stale fallback is used
 and its age is disclosed on the verdict page at zero weight, because how old our copy is
 says nothing about the carrier.
+
+## Security
+
+```bash
+python3 test_security.py     # CSRF, headers, rate limits, audit trail
+```
+
+**CSRF** is enforced in a single `before_request` rather than per route. An opt-in
+decorator only protects the endpoints someone remembered to decorate, and the one that
+gets forgotten is the one that matters. The API is exempt on purpose: bearer-token
+endpoints aren't CSRF-able, because browsers never attach an `Authorization` header on
+their own. A test pins that exemption in place, since "fix" someone might apply later
+would break every integration.
+
+**Rate limits live in Postgres, not memory.** In-process counters are worthless across
+several gunicorn workers on several instances — a limit of 5 becomes 5 × workers ×
+instances, and resets on every deploy. The counter is a single atomic upsert; read-then-
+write would let concurrent requests both see a count under the limit and both proceed,
+which is exactly the race a credential-stuffing script produces on purpose. Tested with
+50 concurrent requests against a limit of 10.
+
+Login is throttled by IP **and** by the email being tried. Either key alone is trivially
+evaded: a botnet rotates IPs against one account, one host sprays many accounts from one
+IP.
+
+**Client IP is only trusted through a configured proxy count.** `TRUSTED_PROXY_HOPS` must
+match reality — too low and every request appears to come from the load balancer, giving
+the whole internet one bucket; too high and a caller spoofs `X-Forwarded-For` for a fresh
+bucket per request. A rate limiter keyed on a spoofable value is decoration.
+
+**The audit trail exists for the lawsuit, not for tidiness.** This product lets one
+company publish a fraud accusation against another by name. When a carrier disputes a
+report — and one eventually will — the questions are who filed it, from where, and when.
+`audit_events` answers them, and `org_id`/`user_id` are `ON DELETE SET NULL` so the record
+of what happened outlives the account that did it.
+
+**CSP is strict where it counts.** The app ships zero JavaScript, so `script-src 'none'`
+costs nothing and removes injected-script attacks outright rather than mitigating them.
+`style-src` still allows `'unsafe-inline'` because the templates use inline `style=`
+attributes; refactoring those into `static/app.css` is what would let that keyword go.
+The residual risk is bounded — CSS exfiltration needs an outbound channel, and `img-src
+'self'` plus `connect-src 'self'` close it.
 
 ### Failed ingest must look failed
 

@@ -40,6 +40,15 @@ class Config:
     # Reject oversized request bodies before they reach a handler.
     MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", str(256 * 1024)))
 
+    # How many reverse proxies sit in front of this app. Rate limiting keys on
+    # the client IP, so this has to be exact: too low and every request appears
+    # to come from the load balancer (one bucket for the whole internet); too
+    # high and a caller can spoof X-Forwarded-For to get a fresh bucket per
+    # request. Render terminates at one hop. Zero means "trust nothing",
+    # correct for local development.
+    TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS",
+                                            "1" if IS_PRODUCTION else "0"))
+
     # External data sources. Absent in development; the ingest job falls back
     # to seeded data and says so rather than pretending it refreshed.
     FMCSA_WEBKEY = os.environ.get("FMCSA_WEBKEY", "")

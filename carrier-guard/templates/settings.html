@@ -25,6 +25,7 @@
     <h2 style="margin-top:0;">API keys</h2>
     <div class="card">
       <form method="post" action="{{ url_for('create_api_key') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <label for="name">Name this key</label>
         <input id="name" name="name" maxlength="80"
                placeholder="McLeod production" required>
@@ -57,6 +58,7 @@
             <form method="post"
                   action="{{ url_for('revoke_api_key', key_id=k.id) }}"
                   style="display:inline;">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <button class="btn btn-red btn-sm" type="submit">Revoke</button>
             </form>
             {% endif %}

@@ -15,6 +15,7 @@ from flask import Blueprint, g, jsonify, request
 from auth import api_key_required, consume_check, quota_state
 from ingest import resolve_carrier
 from risk_engine import normalize_phone, run_check
+from security import limited
 
 log = logging.getLogger("carrierguard.api")
 
@@ -91,6 +92,15 @@ def create_check():
                            message="load_value_usd is out of range."), 400
 
     conn, org = g.api_conn, g.org
+
+    # Two different ceilings. The burst limit protects the service; the plan
+    # quota protects the business model. Hitting either returns 429, but the
+    # error codes differ so an integrator can tell "slow down" from "buy more".
+    allowed, retry_after = limited(conn, "api_org", org["id"])
+    if not allowed:
+        return jsonify(error="rate_limited",
+                       message="Too many requests. Slow down and retry.",
+                       retry_after=retry_after), 429, {"Retry-After": str(retry_after)}
 
     used, limit, exceeded = quota_state(org)
     if exceeded:

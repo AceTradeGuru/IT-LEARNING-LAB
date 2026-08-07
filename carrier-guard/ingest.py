@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 
 import db
 from config import load
+from security import purge_rate_limits
 
 log = logging.getLogger("carrierguard.ingest")
 
@@ -470,6 +471,13 @@ def main():
     summary = run_ingest(mode=mode, mc_numbers=args.mc,
                          stale_hours=args.stale_hours, dry_run=args.dry_run,
                          source=source)
+
+    # Expired rate-limit buckets, swept here rather than per request — there is
+    # no reason to pay for cleanup on the hot path.
+    with db.connection() as conn:
+        purged = purge_rate_limits(conn)
+    if purged:
+        log.info("purged %s expired rate-limit buckets", purged)
 
     print(f"run #{summary['id']}  source={summary['source']}  mode={summary['mode']}  "
           f"status={summary['status'].upper()}")

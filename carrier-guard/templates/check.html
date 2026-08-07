@@ -11,6 +11,7 @@
 <div class="grid grid-2">
   <div class="card">
     <form method="post" action="{{ url_for('check') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <label for="mc_number">MC number</label>
       <input id="mc_number" name="mc_number" class="mono" required
              placeholder="MC-471902" value="{{ form.get('mc_number', '') }}">

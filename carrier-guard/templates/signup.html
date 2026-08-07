@@ -10,6 +10,7 @@
 
   <div class="card">
     <form method="post" action="{{ url_for('signup') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <label for="company_name">Brokerage or company name</label>
       <input id="company_name" name="company_name" required maxlength="200"
              value="{{ form.get('company_name', '') }}">
