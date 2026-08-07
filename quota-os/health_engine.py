@@ -130,6 +130,20 @@ def rep_metrics(conn, rep, today=None):
         or (today - _d(d["last_activity_date"])).days > STALE_DAYS
     ]
     no_next_step = [d for d in open_deals if not (d["next_step"] or "").strip()]
+
+    # How many people we actually know at each open opportunity's account. A deal
+    # with one contact is one job change away from dying, and no amount of pipeline
+    # hygiene shows that — it only becomes visible once contacts are real records.
+    single_threaded = []
+    for d in open_deals:
+        if not d["account_id"]:
+            continue
+        n = conn.execute(
+            "SELECT COUNT(*) n FROM contacts WHERE org_id = ? AND account_id = ?",
+            (org_id, d["account_id"]),
+        ).fetchone()["n"]
+        if n <= 1:
+            single_threaded.append(d)
     slipped = [d for d in open_deals if _d(d["close_date"]) > _d(d["close_date_original"])]
 
     four_weeks_ago = (today - timedelta(days=28)).isoformat()
@@ -191,6 +205,7 @@ def rep_metrics(conn, rep, today=None):
         "lost_deals": lost_deals,
         "stale": stale,
         "no_next_step": no_next_step,
+        "single_threaded": single_threaded,
         "slipped": slipped,
         "activity": dict(act),
         "engagements": engagements,
@@ -362,6 +377,30 @@ def evaluate_rep(conn, rep, today=None, team_median=None):
                 f"Repeated pushes usually mean the buyer's timeline was never real.",
                 -12, "high", fixes="slippage",
             ))
+
+        # Single-threading. Weighted by dollars rather than deal count, because one
+        # single-threaded $300K deal is a bigger problem than three $10K ones.
+        st = m["single_threaded"]
+        if st:
+            st_value = sum(d["amount"] for d in st)
+            share = st_value / m["pipeline_all"] if m["pipeline_all"] else 0
+            if share >= 0.4:
+                worst = max(st, key=lambda d: d["amount"])
+                signals.append(_sig(
+                    "single_threaded", "Single-threaded on most of the pipeline",
+                    f"{len(st)} of {n_open} open deals have exactly one known contact, "
+                    f"covering {round(share * 100)}% of pipeline value. The largest is "
+                    f"{worst['account']} at ${worst['amount']:,} — one person leaving "
+                    f"ends that deal.",
+                    -14, "high", fixes="single_threaded",
+                ))
+            elif share >= 0.2:
+                signals.append(_sig(
+                    "some_single_threaded", "Some deals rest on one contact",
+                    f"{len(st)} of {n_open} open deals have a single known contact, "
+                    f"covering {round(share * 100)}% of pipeline value.",
+                    -6, "medium", fixes="single_threaded",
+                ))
 
         # One whale carrying the quarter is a forecast risk even when the number
         # looks fine today. Two conditions, not one: the deal has to be most of

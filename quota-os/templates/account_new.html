@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}New account{% endblock %}
+{% block crumb %}<a href="{{ url_for('accounts') }}">Accounts</a> / New{% endblock %}
+
+{% block content %}
+<h1>New account</h1>
+<p class="sub">Only the name is required — the rest can be filled in as you learn it.</p>
+
+<form method="post" class="card" style="max-width:760px">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <div class="grid g2">
+    <div><label for="name">Company name</label><input id="name" name="name" required autofocus></div>
+    <div><label for="domain">Domain</label><input id="domain" name="domain" placeholder="acme.com"></div>
+    <div><label for="industry">Industry</label><input id="industry" name="industry"></div>
+    <div><label for="segment">Segment</label>
+      <select id="segment" name="segment">
+        <option>SMB</option><option selected>Mid-Market</option><option>Enterprise</option>
+      </select></div>
+    <div><label for="employees">Employees</label><input id="employees" name="employees" type="number" min="0"></div>
+    <div><label for="owner_rep_id">Owner</label>
+      <select id="owner_rep_id" name="owner_rep_id">
+        <option value="">Unassigned</option>
+        {% for r in reps %}<option value="{{ r.id }}">{{ r.name }} — {{ r.title }}</option>{% endfor %}
+      </select></div>
+  </div>
+  <label for="website">Website</label><input id="website" name="website" placeholder="https://">
+  <label for="notes">Notes</label><textarea id="notes" name="notes"></textarea>
+  <div class="row" style="margin-top:1.2rem">
+    <button class="btn btn-primary">Create account</button>
+    <a class="btn btn-ghost" href="{{ url_for('accounts') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

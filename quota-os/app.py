@@ -29,12 +29,13 @@ import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from flask import (Flask, abort, flash, g, redirect, render_template, request,
-                   session, url_for)
+from flask import (Flask, Response, abort, flash, g, redirect, render_template,
+                   request, session, url_for)
 from markupsafe import Markup, escape
 
 import ai_engine
 import auth
+import compliance
 import importer
 from config import Config, validate
 from health_engine import (evaluate_org, evaluate_rep, pipeline_by_stage,
@@ -607,6 +608,167 @@ def pipeline():
                            selected=request.args.get("rep", ""), quarter=quarter_label())
 
 
+# ---------------------------------------------------------------- accounts --
+
+CONTACT_ROLES = ["champion", "economic_buyer", "technical", "influencer", "blocker", "user"]
+
+
+@app.route("/accounts")
+@auth.login_required
+def accounts():
+    """
+    Companies you sell to, with contact coverage front and centre.
+
+    Coverage is the column that matters: an account with open pipeline and one
+    known contact is the one to fix this week.
+    """
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    _, rep_ids = _scope(conn)
+
+    where, params = "WHERE a.org_id = ?", [org_id]
+    if rep_ids is not None:
+        if not rep_ids:
+            conn.close()
+            return render_template("accounts.html", accounts=[], q="")
+        where += f" AND a.owner_rep_id IN ({','.join('?' * len(rep_ids))})"
+        params.extend(rep_ids)
+    q = request.args.get("q", "").strip()
+    if q:
+        where += " AND lower(a.name) LIKE ?"
+        params.append(f"%{q.lower()}%")
+
+    rows = conn.execute(
+        f"""SELECT a.*, r.name owner_name,
+                   (SELECT COUNT(*) FROM contacts c
+                     WHERE c.org_id = a.org_id AND c.account_id = a.id) contacts,
+                   (SELECT COUNT(*) FROM deals d
+                     WHERE d.org_id = a.org_id AND d.account_id = a.id
+                       AND d.stage NOT IN ('closed_won','closed_lost')) open_deals,
+                   (SELECT COALESCE(SUM(d.amount),0) FROM deals d
+                     WHERE d.org_id = a.org_id AND d.account_id = a.id
+                       AND d.stage NOT IN ('closed_won','closed_lost')) open_value
+              FROM accounts a
+              LEFT JOIN reps r ON r.id = a.owner_rep_id AND r.org_id = a.org_id
+              {where}
+             ORDER BY open_value DESC, a.name LIMIT 300""",
+        tuple(params),
+    ).fetchall()
+    conn.close()
+    return render_template("accounts.html", accounts=rows, q=q)
+
+
+@app.route("/account/<int:account_id>", methods=["GET", "POST"])
+@auth.login_required
+def account_detail(account_id):
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    acct = auth.scoped_one(conn, "accounts", account_id)
+
+    if request.method == "POST":
+        if not auth.has_role("manager"):
+            conn.close()
+            abort(403)
+        f = request.form
+        role = f.get("role_type", "influencer")
+        if role not in CONTACT_ROLES:
+            conn.close()
+            abort(400, description="Unknown contact role.")
+        if not f.get("name", "").strip():
+            conn.close()
+            flash("A contact needs a name.")
+            return redirect(url_for("account_detail", account_id=account_id))
+        conn.execute(
+            """INSERT INTO contacts (org_id, account_id, name, title, email, phone,
+                                     role_type, is_primary, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (org_id, account_id, f["name"].strip(), f.get("title", "").strip(),
+             f.get("email", "").strip(), f.get("phone", "").strip(), role,
+             1 if f.get("is_primary") else 0, date.today().isoformat()))
+        conn.commit()
+        conn.close()
+        flash(f"Added {f['name'].strip()} to {acct['name']}.")
+        return redirect(url_for("account_detail", account_id=account_id))
+
+    contacts = conn.execute(
+        """SELECT * FROM contacts WHERE org_id = ? AND account_id = ?
+            ORDER BY is_primary DESC, role_type, name""",
+        (org_id, account_id)).fetchall()
+    deals = conn.execute(
+        """SELECT d.*, r.name rep_name FROM deals d
+             JOIN reps r ON r.id = d.rep_id AND r.org_id = d.org_id
+            WHERE d.org_id = ? AND d.account_id = ? ORDER BY d.close_date DESC""",
+        (org_id, account_id)).fetchall()
+    owner = None
+    if acct["owner_rep_id"]:
+        owner = conn.execute("SELECT * FROM reps WHERE id = ? AND org_id = ?",
+                             (acct["owner_rep_id"], org_id)).fetchone()
+    conn.close()
+    open_deals = [d for d in deals if d["stage"] not in ("closed_won", "closed_lost")]
+    return render_template("account.html", a=acct, contacts=contacts, deals=deals,
+                           open_deals=open_deals, owner=owner, roles=CONTACT_ROLES)
+
+
+@app.route("/accounts/new", methods=["GET", "POST"])
+@auth.role_required("manager")
+def account_new():
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    if request.method == "POST":
+        f = request.form
+        name = f.get("name", "").strip()
+        if not name:
+            conn.close()
+            flash("An account needs a name.")
+            return redirect(url_for("account_new"))
+        dupe = conn.execute("SELECT id FROM accounts WHERE org_id = ? AND lower(name) = ?",
+                            (org_id, name.lower())).fetchone()
+        if dupe:
+            conn.close()
+            flash(f"{name} already exists.")
+            return redirect(url_for("account_detail", account_id=dupe["id"]))
+        owner = f.get("owner_rep_id") or None
+        if owner and not conn.execute("SELECT 1 FROM reps WHERE id = ? AND org_id = ?",
+                                      (owner, org_id)).fetchone():
+            conn.close()
+            abort(403)
+        aid = conn.execute(
+            """INSERT INTO accounts (org_id, name, domain, industry, segment, employees,
+                                     website, owner_rep_id, notes, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, name, f.get("domain", "").strip(), f.get("industry", "").strip(),
+             f.get("segment", "Mid-Market"),
+             int(f["employees"]) if (f.get("employees") or "").isdigit() else None,
+             f.get("website", "").strip(), owner, f.get("notes", "").strip(),
+             date.today().isoformat())).lastrowid
+        conn.commit()
+        conn.close()
+        flash(f"Created {name}.")
+        return redirect(url_for("account_detail", account_id=aid))
+    reps = conn.execute(
+        "SELECT * FROM reps WHERE org_id = ? AND status = 'active' ORDER BY name",
+        (org_id,)).fetchall()
+    conn.close()
+    return render_template("account_new.html", reps=reps)
+
+
+@app.route("/contact/<int:contact_id>/delete", methods=["POST"])
+@auth.role_required("manager")
+def contact_delete(contact_id):
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    row = conn.execute("SELECT * FROM contacts WHERE id = ? AND org_id = ?",
+                       (contact_id, org_id)).fetchone()
+    if row is None:
+        conn.close()
+        abort(404)
+    conn.execute("DELETE FROM contacts WHERE id = ? AND org_id = ?", (contact_id, org_id))
+    conn.commit()
+    conn.close()
+    flash(f"Removed {row['name']}.")
+    return redirect(url_for("account_detail", account_id=row["account_id"]))
+
+
 # --------------------------------------------------------------- training --
 
 @app.route("/training")
@@ -719,6 +881,122 @@ def session_signup(session_id):
     conn.close()
     flash(f"{rep['name']} is booked into the session.")
     return redirect(url_for("training"))
+
+
+# ------------------------------------------------------------- compliance --
+
+@app.route("/settings/compliance")
+@auth.role_required("admin")
+def settings_compliance():
+    """
+    Retention status, subject-rights tooling, and the bias-audit export.
+
+    None of this makes an organization compliant. It makes the things a regulator
+    or an auditor asks for producible, which is the part software can do.
+    """
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    summary = compliance.retention_summary(conn, org_id, Config.CANDIDATE_RETENTION_DAYS)
+    due = compliance.due_for_purge(conn, org_id)
+    conn.close()
+    return render_template("settings_compliance.html", summary=summary, due=due)
+
+
+@app.route("/settings/compliance/backfill", methods=["POST"])
+@auth.role_required("admin")
+def compliance_backfill():
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    n = compliance.backfill_retention(conn, org_id, Config.CANDIDATE_RETENTION_DAYS)
+    auth.audit(conn, "compliance.backfill", detail={"stamped": n})
+    conn.commit()
+    conn.close()
+    flash(f"Stamped a retention date on {n} candidate records, measured from when "
+          f"each was created.")
+    return redirect(url_for("settings_compliance"))
+
+
+@app.route("/settings/compliance/purge", methods=["POST"])
+@auth.role_required("owner")
+def compliance_purge():
+    """Owner-only: this destroys data and cannot be undone."""
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    dry = request.form.get("dry_run") == "1"
+    rep = compliance.purge_expired(conn, org_id, dry_run=dry)
+    if not dry:
+        auth.audit(conn, "compliance.purge", detail=rep)
+        conn.commit()
+    conn.close()
+    if dry:
+        flash(f"Dry run — {rep['examined']} candidate records are past their "
+              f"retention date and would be deleted. Nothing was changed.")
+    else:
+        flash(f"Purged {rep['purged']} candidate records past their retention date.")
+    return redirect(url_for("settings_compliance"))
+
+
+@app.route("/settings/compliance/adverse-impact.csv")
+@auth.role_required("admin")
+def compliance_adverse_impact():
+    """
+    The dataset an independent bias auditor needs, minus demographics.
+
+    QuotaOS holds no race or sex data by design — see compliance.py. The auditor
+    joins their separately-collected EEO self-identification on `candidate_key`.
+    """
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    csv_text = compliance.adverse_impact_csv(conn, org_id, request.args.get("since"))
+    auth.audit(conn, "compliance.export", detail={"kind": "adverse_impact"})
+    conn.commit()
+    conn.close()
+    return Response(csv_text, mimetype="text/csv", headers={
+        "Content-Disposition": f"attachment; filename=quotaos-adverse-impact-"
+                               f"{date.today().isoformat()}.csv"})
+
+
+@app.route("/candidate/<int:candidate_id>/export.json")
+@auth.role_required("admin")
+def candidate_export(candidate_id):
+    """GDPR Art. 15 — everything held about one person, including the AI reasoning."""
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    data = compliance.export_candidate(conn, org_id, candidate_id)
+    if data is None:
+        conn.close()
+        abort(404)
+    auth.audit(conn, "compliance.export", entity=f"candidate:{candidate_id}",
+               detail={"kind": "subject_access"})
+    conn.commit()
+    conn.close()
+    return Response(json.dumps(data, indent=2, default=str), mimetype="application/json",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=candidate-{candidate_id}.json"})
+
+
+@app.route("/candidate/<int:candidate_id>/erase", methods=["POST"])
+@auth.role_required("owner")
+def candidate_erase(candidate_id):
+    """
+    GDPR Art. 17 — destroy the person, keep the decision.
+
+    Owner-only and irreversible. The audit entries survive with identifiers
+    stripped, so the process stays auditable without retaining the human.
+    """
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    result = compliance.erase_candidate(conn, org_id, candidate_id)
+    if result is None:
+        conn.close()
+        abort(404)
+    auth.audit(conn, "compliance.erase", entity=f"candidate:{candidate_id}",
+               detail={"applications_removed": result["applications"]})
+    conn.commit()
+    conn.close()
+    flash(f"Erased all data for {result['name']} — {result['applications']} "
+          f"application(s) removed. Redacted audit entries were kept.")
+    return redirect(url_for("candidates"))
 
 
 # ----------------------------------------------------------------- import --
@@ -1062,6 +1340,7 @@ def add_candidate(req_id, candidate_id):
            VALUES (?,?,?,?,?,?,?)""",
         (org_id, aid, None, "sourced", "Added from AI resume search", g.user["id"], now),
     )
+    compliance.set_retention(conn, org_id, candidate_id, Config.CANDIDATE_RETENTION_DAYS)
     conn.commit()
     conn.close()
     flash("Candidate added to the funnel.")

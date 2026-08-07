@@ -31,6 +31,7 @@ Everything is dated relative to today, so the demo never goes stale.
 
 import json
 import random
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -358,7 +359,7 @@ COURSES = [
      "no_next_step"),
     ("METH-150", "Multi-threading the Enterprise Account", "Method", 4.0,
      "Getting to three contacts before you need them, so one gone-dark champion isn't fatal.",
-     "concentration"),
+     "single_threaded"),
     ("METH-160", "Territory Planning & Activity Blocking", "Method", 2.5,
      "Segmenting a patch and defending the calendar blocks that keep it fed.",
      "low_activity"),
@@ -394,6 +395,100 @@ TRACKS = [
      "Optional depth track for reps carrying enterprise accounts.",
      "Enterprise", 24, 0, ["PROD-201", "METH-150", "IND-210"]),
 ]
+
+
+_FIRST = ["Karen", "Dave", "Priya", "Marcus", "Elena", "Tom", "Aisha", "Jon", "Mei",
+          "Carlos", "Ruth", "Ahmed", "Nina", "Paul", "Sofia", "Derek", "Yuki", "Grace",
+          "Ivan", "Lena", "Omar", "Bea", "Kwame", "Ingrid", "Raj", "Cleo", "Victor"]
+_LAST = ["Vaughn", "Kruse", "Boudreaux", "Ellery", "Nakamura", "Osei", "Lindqvist",
+         "Moreau", "Halloran", "Espinoza", "Ferris", "Abadi", "Whitlock", "Sandoval",
+         "Bergstrom", "Achebe", "Novak", "Reyes", "Cavendish", "Ito", "Dunmore"]
+_TITLES = {
+    "economic_buyer": ["CFO", "VP Finance", "COO", "SVP Operations", "Chief Revenue Officer"],
+    "champion": ["Director of Operations", "Head of Revenue Ops", "Senior Manager, IT",
+                 "Director of Sales Enablement"],
+    "technical": ["Principal Engineer", "IT Security Lead", "Solutions Architect",
+                  "Head of Infrastructure"],
+    "influencer": ["Operations Manager", "Business Analyst", "Program Manager"],
+    "blocker": ["Procurement Lead", "General Counsel", "Head of Vendor Risk"],
+}
+_INDUSTRIES = ["Healthcare", "Financial Services", "Manufacturing", "Logistics",
+               "Retail", "Energy", "Software", "Professional Services"]
+
+
+def seed_accounts(conn, org_id):
+    """
+    Turn the account *names* on seeded deals into real account rows, then staff
+    them with contacts.
+
+    Contact coverage is deliberately uneven. Most accounts get two to four people
+    across different roles; a handful get a single champion and nothing else. That
+    second group is what the multi-threading signal is for — and Greg Nowak's whale
+    deal is forced into it, so the rep whose quarter already rides on one deal also
+    turns out to have exactly one person answering the phone there.
+    """
+    names = [r["account"] for r in conn.execute(
+        "SELECT DISTINCT account FROM deals WHERE org_id = ? ORDER BY account", (org_id,))]
+
+    # The one account we want single-threaded for narrative reasons.
+    whale = conn.execute(
+        """SELECT d.account FROM deals d JOIN reps r ON r.id = d.rep_id
+            WHERE d.org_id = ? AND r.name = 'Greg Nowak'
+              AND d.stage NOT IN ('closed_won','closed_lost')
+            ORDER BY d.amount DESC LIMIT 1""", (org_id,)).fetchone()
+    whale_name = whale["account"] if whale else None
+
+    account_ids = {}
+    for name in names:
+        seg = conn.execute(
+            "SELECT segment FROM deals d JOIN reps r ON r.id = d.rep_id "
+            "WHERE d.org_id = ? AND d.account = ? LIMIT 1", (org_id, name)).fetchone()
+        owner = conn.execute(
+            "SELECT rep_id FROM deals WHERE org_id = ? AND account = ? "
+            "ORDER BY amount DESC LIMIT 1", (org_id, name)).fetchone()
+        slug = re.sub(r"[^a-z0-9]+", "", name.lower())[:22]
+        aid = conn.execute(
+            """INSERT INTO accounts (org_id, name, domain, industry, segment, employees,
+                                     website, owner_rep_id, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (org_id, name, f"{slug}.example", RNG.choice(_INDUSTRIES),
+             seg["segment"] if seg else "Mid-Market",
+             RNG.choice([45, 120, 340, 900, 2400, 6100, 14000]),
+             f"https://{slug}.example", owner["rep_id"] if owner else None, _iso(TODAY)),
+        ).lastrowid
+        account_ids[name] = aid
+        conn.execute("UPDATE deals SET account_id = ? WHERE org_id = ? AND account = ?",
+                     (aid, org_id, name))
+
+        # Staff it.
+        if name == whale_name:
+            roles = ["champion"]                      # deliberately single-threaded
+        else:
+            roll = RNG.random()
+            if roll < 0.22:
+                roles = ["champion"]                  # the natural single-threaded tail
+            elif roll < 0.6:
+                roles = ["champion", "economic_buyer"]
+            elif roll < 0.85:
+                roles = ["champion", "economic_buyer", "technical"]
+            else:
+                roles = ["champion", "economic_buyer", "technical",
+                         RNG.choice(["influencer", "blocker"])]
+
+        for i, role in enumerate(roles):
+            person = f"{RNG.choice(_FIRST)} {RNG.choice(_LAST)}"
+            conn.execute(
+                """INSERT INTO contacts (org_id, account_id, name, title, email, phone,
+                                         role_type, is_primary, last_contacted, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (org_id, aid, person, RNG.choice(_TITLES[role]),
+                 f"{person.split()[0][0].lower()}{person.split()[1].lower()}@{slug}.example",
+                 f"({RNG.randint(200,989)}) 555-{RNG.randint(1000,9999)}",
+                 role, 1 if i == 0 else 0,
+                 _iso(TODAY - timedelta(days=RNG.randint(1, 45))), _iso(TODAY)),
+            )
+    conn.commit()
+    return account_ids
 
 
 def seed_training(conn, org_id, rep_ids):
@@ -787,6 +882,7 @@ def seed_sample_data():
     ).lastrowid
 
     vp_id, manager_ids, rep_ids = seed_org(conn, org_id)
+    seed_accounts(conn, org_id)
     course_ids, track_ids = seed_training(conn, org_id, rep_ids)
     seed_hiring(conn, org_id, rep_ids, course_ids)
 
@@ -813,7 +909,8 @@ def rebuild():
     seed_sample_data()
     conn = get_connection()
     counts = {t: conn.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()["n"]
-              for t in ("orgs", "users", "reps", "deals", "activities", "courses",
+              for t in ("orgs", "users", "reps", "accounts", "contacts", "deals",
+                        "activities", "courses",
                         "cert_tracks", "certifications", "enrollments", "class_sessions",
                         "reqs", "candidates", "applications", "interviews")}
     conn.close()

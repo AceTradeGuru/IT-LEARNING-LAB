@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}{{ a.name }}{% endblock %}
+{% block crumb %}<a href="{{ url_for('accounts') }}">Accounts</a> / {{ a.name }}{% endblock %}
+
+{% block content %}
+<h1>{{ a.name }}</h1>
+<p class="sub">
+  {{ a.industry or 'Industry not set' }} · {{ a.segment or '—' }}
+  {% if a.employees %} · {{ '{:,}'.format(a.employees) }} employees{% endif %}
+  {% if owner %} · owned by <a href="{{ url_for('rep_detail', rep_id=owner.id) }}">{{ owner.name }}</a>{% endif %}
+  {% if a.website %}<br><a href="{{ a.website }}" rel="noopener noreferrer nofollow">{{ a.domain or a.website }}</a>{% endif %}
+</p>
+
+<div class="grid g4" style="margin-bottom:1rem">
+  <div class="kpi"><div class="lbl">Open deals</div>
+    <div class="num sm">{{ open_deals|length }}</div></div>
+  <div class="kpi"><div class="lbl">Open value</div>
+    <div class="num sm">{{ open_deals|sum(attribute='amount')|money if open_deals else '—' }}</div></div>
+  <div class="kpi"><div class="lbl">Contacts</div>
+    <div class="num sm {{ 'score at_risk' if contacts|length <= 1 and open_deals }}">{{ contacts|length }}</div>
+    <div class="note">{{ contacts|selectattr('role_type','equalto','economic_buyer')|list|length }} economic buyer(s)</div></div>
+  <div class="kpi"><div class="lbl">Closed won</div>
+    <div class="num sm">{{ deals|selectattr('stage','equalto','closed_won')|sum(attribute='amount')|money }}</div></div>
+</div>
+
+{% if contacts|length <= 1 and open_deals %}
+<div class="card" style="border-color:var(--at_risk)">
+  <h3>Single-threaded</h3>
+  <p class="tiny muted" style="max-width:76ch">
+    {{ open_deals|sum(attribute='amount')|money }} of open pipeline rests on
+    {{ 'one contact' if contacts else 'nobody on record' }}. This is what the
+    multi-threading signal on the rep's page is reading, and it is the cheapest
+    risk on this page to fix — one more named person changes the number.
+  </p>
+</div>
+{% endif %}
+
+<div class="grid split">
+  <div>
+    <h2>Contacts ({{ contacts|length }})</h2>
+    <div class="card pad0">
+      <div class="tablewrap">
+      <table>
+        <thead><tr><th>Name</th><th>Role</th><th>Contact</th><th>Last touch</th>
+                   {% if has_role('manager') %}<th></th>{% endif %}</tr></thead>
+        <tbody>
+        {% for c in contacts %}
+          <tr>
+            <td><b>{{ c.name }}</b>{% if c.is_primary %} <span class="badge brand">primary</span>{% endif %}
+              <div class="tiny muted">{{ c.title or '—' }}</div></td>
+            <td><span class="badge {{ 'strong' if c.role_type == 'economic_buyer' else 'at_risk' if c.role_type == 'blocker' else 'neutral' }}">
+              {{ c.role_type|replace('_',' ') }}</span></td>
+            <td class="tiny">{{ c.email or '—' }}<br><span class="muted">{{ c.phone or '' }}</span></td>
+            <td class="tiny muted">{{ c.last_contacted|since if c.last_contacted else 'never' }}</td>
+            {% if has_role('manager') %}
+            <td><form method="post" action="{{ url_for('contact_delete', contact_id=c.id) }}" class="inline">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <button class="btn btn-ghost btn-sm">Remove</button></form></td>
+            {% endif %}
+          </tr>
+        {% else %}
+          <tr><td colspan="5"><div class="empty">Nobody on record at this account.</div></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <h2>Deals ({{ deals|length }})</h2>
+    <div class="card pad0">
+      <div class="tablewrap">
+      <table>
+        <thead><tr><th>Stage</th><th class="num">Amount</th><th>Close</th><th>Rep</th><th>Next step</th></tr></thead>
+        <tbody>
+        {% for d in deals %}
+          <tr>
+            <td><span class="badge {{ 'strong' if d.stage == 'closed_won' else 'neutral' }}">{{ d.stage|replace('_',' ')|title }}</span></td>
+            <td class="num">{{ d.amount|dollars }}</td>
+            <td class="tiny">{{ d.close_date|nicedate }}
+              {% if d.close_date > d.close_date_original %}<br><span class="badge watch">slipped</span>{% endif %}</td>
+            <td class="tiny"><a href="{{ url_for('rep_detail', rep_id=d.rep_id) }}">{{ d.rep_name }}</a></td>
+            <td class="tiny muted">{{ d.next_step or '—' }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5"><div class="empty">No deals at this account.</div></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    {% if has_role('manager') %}
+    <form method="post" class="card">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <h3>Add a contact</h3>
+      <label for="name">Name</label><input id="name" name="name" required>
+      <label for="title">Title</label><input id="title" name="title">
+      <label for="role_type">Role in the deal</label>
+      <select id="role_type" name="role_type">
+        {% for r in roles %}<option value="{{ r }}">{{ r|replace('_',' ') }}</option>{% endfor %}
+      </select>
+      <label for="email">Email</label><input id="email" name="email" type="email">
+      <label for="phone">Phone</label><input id="phone" name="phone">
+      <label class="row" style="text-transform:none;letter-spacing:0;font-weight:400;margin-top:.8rem">
+        <input type="checkbox" name="is_primary" style="width:auto;margin-right:.5rem"> Primary contact
+      </label>
+      <button class="btn btn-primary" style="margin-top:1rem">Add contact</button>
+    </form>
+    {% endif %}
+    {% if a.notes %}
+      <div class="card"><h3>Notes</h3><p class="tiny muted">{{ a.notes }}</p></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

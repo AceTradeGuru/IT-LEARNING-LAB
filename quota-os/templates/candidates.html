@@ -13,7 +13,8 @@
   <div class="tablewrap">
   <table>
     <thead><tr><th>Candidate</th><th>Current role</th><th class="num">Yrs</th>
-               <th>Location</th><th>Source</th><th class="num">Applications</th><th>Added</th></tr></thead>
+               <th>Location</th><th>Source</th><th class="num">Applications</th><th>Added</th><th>Retention</th>
+               {% if has_role('admin') %}<th>Subject rights</th>{% endif %}</tr></thead>
     <tbody>
     {% for c in candidates %}
       <tr>
@@ -30,6 +31,26 @@
         <td class="tiny">{{ c.source }}</td>
         <td class="num">{{ c.apps }}</td>
         <td class="tiny muted">{{ c.created_at|since }}</td>
+        <td class="tiny">
+          {% if c.purge_after %}
+            <span class="muted">purges {{ c.purge_after|nicedate }}</span>
+          {% else %}<span class="badge watch">no end date</span>{% endif %}
+        </td>
+        {% if has_role('admin') %}
+        <td>
+          <div class="row" style="gap:.3rem">
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('candidate_export', candidate_id=c.id) }}"
+               title="GDPR Art. 15 — everything held about this person">Export</a>
+            {% if has_role('owner') %}
+              <form method="post" action="{{ url_for('candidate_erase', candidate_id=c.id) }}" class="inline"
+                    onsubmit="return confirm('Permanently erase {{ c.name }} and all their application data? This cannot be undone.')">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <button class="btn btn-red btn-sm" title="GDPR Art. 17 erasure">Erase</button>
+              </form>
+            {% endif %}
+          </div>
+        </td>
+        {% endif %}
       </tr>
     {% endfor %}
     </tbody>

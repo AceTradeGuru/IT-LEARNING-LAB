@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Compliance{% endblock %}
+{% block crumb %}Settings / Compliance{% endblock %}
+
+{% block content %}
+<h1>Compliance</h1>
+<p class="sub">
+  Nothing on this page makes {{ user.org_name }} compliant — that needs counsel who
+  knows your jurisdictions. What it does is make the three things a regulator or an
+  auditor actually asks for <b>producible</b>: a retention clock that runs, a
+  subject-access and erasure path that doesn't require a database console, and the
+  outcome dataset an independent bias audit is built from.
+</p>
+
+<div class="grid g4" style="margin-bottom:1rem">
+  <div class="kpi">
+    <div class="lbl">Candidate records</div>
+    <div class="num">{{ summary.total }}</div>
+    <div class="note">{{ summary.scored }} have an AI score</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Past retention</div>
+    <div class="num {{ 'score at_risk' if summary.due else 'score strong' }}">{{ summary.due }}</div>
+    <div class="note">held longer than {{ summary.retention_days }} days</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Due within 30 days</div>
+    <div class="num sm">{{ summary.due_soon }}</div>
+    <div class="note">will purge on schedule</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">No retention date</div>
+    <div class="num sm {{ 'score watch' if summary.unstamped }}">{{ summary.unstamped }}</div>
+    <div class="note">personal data with no end date</div>
+  </div>
+</div>
+
+{% if summary.unstamped %}
+<div class="card" style="border-color:var(--watch)">
+  <h3>{{ summary.unstamped }} records have no retention date</h3>
+  <p class="tiny muted" style="max-width:76ch">
+    Personal data without an end date is the finding that shows up in every audit.
+    Stamping measures from when each record was created, not from today — backdating
+    to today would silently extend the retention of data you may already have held
+    too long.
+  </p>
+  <form method="post" action="{{ url_for('compliance_backfill') }}" style="margin-top:.7rem">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <button class="btn btn-primary btn-sm">Stamp retention dates</button>
+  </form>
+</div>
+{% endif %}
+
+<h2>Retention</h2>
+<div class="card">
+  <p class="tiny muted" style="max-width:76ch">
+    Candidates are held for <b>{{ summary.retention_days }} days</b> from when they
+    enter a funnel (<span class="mono">CANDIDATE_RETENTION_DAYS</span>). Purging
+    destroys the candidate, their applications, their stage history, and their AI
+    interviews. Audit entries survive with identifiers stripped, so the process
+    stays auditable without retaining the person.
+  </p>
+  <p class="tiny muted" style="margin-top:.6rem">
+    Run it unattended from a Render cron:
+    <span class="mono">python3 compliance.py --purge</span> — add
+    <span class="mono">--dry-run</span> the first time.
+  </p>
+
+  {% if due %}
+    <div class="tablewrap" style="margin-top:.9rem">
+    <table>
+      <thead><tr><th>Candidate</th><th>Email</th><th>Retention expired</th></tr></thead>
+      <tbody>
+      {% for d in due[:20] %}
+        <tr>
+          <td class="tiny"><b>{{ d.name }}</b></td>
+          <td class="tiny muted">{{ d.email }}</td>
+          <td class="tiny">{{ d.purge_after|nicedate }} <span class="muted">({{ d.purge_after|since }})</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if due|length > 20 %}<p class="tiny muted">Showing 20 of {{ due|length }}.</p>{% endif %}
+  {% else %}
+    <p class="tiny" style="margin-top:.7rem"><span class="badge strong">Nothing past its retention date</span></p>
+  {% endif %}
+
+  <div class="row" style="margin-top:1rem">
+    <form method="post" action="{{ url_for('compliance_purge') }}" class="inline">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="dry_run" value="1">
+      <button class="btn btn-ghost btn-sm">Dry run</button>
+    </form>
+    {% if has_role('owner') %}
+      <form method="post" action="{{ url_for('compliance_purge') }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button class="btn btn-red btn-sm">Purge {{ due|length }} expired record{{ 's' if due|length != 1 }}</button>
+      </form>
+    {% else %}
+      <span class="tiny muted">Purging is owner-only — it destroys data irreversibly.</span>
+    {% endif %}
+  </div>
+</div>
+
+<h2>Bias audit</h2>
+<div class="card">
+  <p style="max-width:76ch">
+    <b>QuotaOS holds no race, ethnicity, or sex data, and the scoring path could not
+    read it if it did.</b> That is deliberate. A model that cannot see a protected
+    characteristic cannot score on it — a materially stronger position than
+    collecting it and promising not to look.
+  </p>
+  <p class="tiny muted" style="max-width:76ch;margin-top:.6rem">
+    NYC Local Law 144 requires an annual independent audit of selection rates across
+    those categories, so the auditor needs demographics from somewhere. The standard
+    pattern: your organization collects voluntary EEO self-identification through a
+    channel the hiring decision never touches, and the auditor joins it to this
+    export on <span class="mono">candidate_key</span>. Wiring demographics into this
+    database would destroy the property that makes the scoring defensible.
+  </p>
+  <p class="tiny muted" style="max-width:76ch;margin-top:.6rem">
+    The export carries one row per application: the requisition, the resume match
+    score, the AI interview score and recommendation, the engine and exact model id
+    that produced it, and the final stage reached.
+  </p>
+  <div class="row" style="margin-top:.9rem">
+    <a class="btn btn-primary btn-sm" href="{{ url_for('compliance_adverse_impact') }}">
+      Download outcome dataset (CSV)</a>
+    <span class="tiny muted">{{ summary.scored }} scored interviews across
+      {{ summary.total }} candidates</span>
+  </div>
+</div>
+
+<h2>Subject rights</h2>
+<div class="card">
+  <div class="grid g2">
+    <div>
+      <h3>Access — GDPR Art. 15</h3>
+      <p class="tiny muted">
+        Everything held about one person, as JSON: their record, every application,
+        the full stage history, and every AI interview <em>including the questions,
+        their answers, the per-question scores, and the rationale</em>. Somebody
+        asking what a system decided about them is entitled to the reasoning, not
+        just the verdict. Available from any candidate's row in the
+        <a href="{{ url_for('candidates') }}">candidate pool</a>.
+      </p>
+    </div>
+    <div>
+      <h3>Erasure — GDPR Art. 17</h3>
+      <p class="tiny muted">
+        Destroys the candidate and all their application data. Redacted audit
+        entries remain, so you can still show <em>that</em> a decision was made and
+        what it scored, without retaining who it was about. Owner-only and
+        irreversible.
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="border-color:var(--at_risk)">
+  <h3>Still on you</h3>
+  <ul style="margin:.5rem 0 0 1.1rem">
+    <li class="tiny" style="margin:.3rem 0">Commissioning the annual independent bias audit, and publishing its summary — LL144 requires both.</li>
+    <li class="tiny" style="margin:.3rem 0">Notifying candidates that an automated tool is used, at least 10 business days before use.</li>
+    <li class="tiny" style="margin:.3rem 0">Deciding which jurisdictions you operate in — Illinois, Colorado, and the EU each add their own requirements.</li>
+    <li class="tiny" style="margin:.3rem 0">A DPA with Anthropic if candidate data reaches the model, and telling candidates a subprocessor is involved.</li>
+    <li class="tiny" style="margin:.3rem 0">Having a lawyer read all of this. This page is engineering, not advice.</li>
+  </ul>
+</div>
+{% endblock %}

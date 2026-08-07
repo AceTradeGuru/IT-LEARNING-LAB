@@ -186,8 +186,12 @@ def scoped_one(conn, table, row_id):
     Using this instead of a bare `WHERE id = ?` is what stops an
     incrementing-integer URL from walking another tenant's records.
     """
+    # Allowlist rather than free-form: the table name is interpolated into SQL
+    # below, so it must never come from anywhere but this set. Adding a new
+    # tenant-owned entity means adding it here — the ValueError is the reminder.
     if table not in {"reps", "deals", "reqs", "candidates", "applications",
-                     "interviews", "courses", "cert_tracks", "class_sessions"}:
+                     "interviews", "courses", "cert_tracks", "class_sessions",
+                     "accounts", "contacts", "imports"}:
         raise ValueError(f"scoped_one called on unexpected table: {table}")
     row = conn.execute(
         f"SELECT * FROM {table} WHERE id = ? AND org_id = ?",

@@ -95,6 +95,47 @@ one deal a month and discount it, then re-import. Result — `0 created, 1 updat
 > **Close dates are moving** — 1 of 3 deals have slipped, the worst by 30 days.
 > Repeated pushes usually mean the buyer's timeline was never real.
 
+## Accounts and contacts
+
+`deals.account` used to be a text column, which meant two deals at the same company
+were two unrelated strings. Accounts and contacts are now real entities, and deals
+link to them.
+
+The column that earns its keep is `contacts.role_type` — champion, economic buyer,
+technical, influencer, blocker, user. It powers a signal no pipeline report can
+produce: **single-threading**. A deal where one person is the only contact is one
+job change from dying, weighted by dollars rather than deal count, because one
+single-threaded $300K deal matters more than three $10K ones. It maps to METH-150
+(*Multi-threading the Enterprise Account*), so the fix is one click from the
+finding — same join as every other signal.
+
+The importer creates and links accounts automatically, matching case-insensitively
+on name, so a CRM import lands on real company records rather than bare strings.
+
+## Compliance
+
+`/settings/compliance` (admin) covers what AI-hiring regulation asks you to be able
+to produce:
+
+- **Retention** — candidates carry a purge date; `python3 compliance.py --purge`
+  runs unattended from a cron, with `--dry-run` to see it first.
+- **Subject access (GDPR Art. 15)** — one click exports everything held about a
+  person as JSON, *including* the interview questions, their answers, the
+  per-question scores and the rationale. Someone asking what a system decided about
+  them is entitled to the reasoning, not just the verdict.
+- **Erasure (Art. 17)** — destroys the person, keeps a redacted decision record, so
+  the process stays auditable without retaining the human.
+- **Bias audit (NYC LL144)** — a CSV of every application's scores and outcomes.
+
+**QuotaOS stores no race, ethnicity, or sex data, and the scoring path could not
+read it if it did.** That's deliberate: a model that can't see a protected
+characteristic can't score on it, which is a stronger position than collecting it
+and promising not to look. The audit export emits a `candidate_key` so an
+independent auditor joins your separately-collected EEO self-identification to the
+outcomes — the scoring system never holds both halves.
+
+None of this is legal advice, and it doesn't make anyone compliant.
+
 ## The health engine
 
 `health_engine.py` scores each rep 0–100 by asking the six questions a good
@@ -186,7 +227,8 @@ health_engine.py  Rep and org scoring. No AI: a manager assigning remediation
                   wants the same answer every time.
 ai_engine.py      Claude-backed hiring intelligence + offline fallbacks
 importer.py       Salesforce / HubSpot CSV import — sniffing, stage mapping,
-                  dry-run planning, idempotent apply
+                  dry-run planning, idempotent apply, account upsert
+compliance.py     Retention, subject access/erasure, bias-audit export
 auth.py           Login, roles, tenant scoping, CSRF, audit trail
 db.py             SQLite locally, Postgres in production
 config.py         Environment-driven settings with a fail-fast production guard

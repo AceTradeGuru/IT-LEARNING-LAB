@@ -27,6 +27,8 @@
 
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS contacts;
+DROP TABLE IF EXISTS accounts;
 DROP TABLE IF EXISTS imports;
 DROP TABLE IF EXISTS ai_spend;
 DROP TABLE IF EXISTS audit_log;
@@ -158,13 +160,62 @@ CREATE TABLE reps (
 );
 CREATE INDEX idx_reps_org ON reps(org_id, status);
 
+-- A company you sell to. Until now `deals.account` was a text column, which meant
+-- two deals at the same company were two unrelated strings — no account history,
+-- no way to see who else is in the building, no relationship to inherit when a rep
+-- leaves. This is the entity that makes QuotaOS a system of record rather than a
+-- reporting layer.
+CREATE TABLE accounts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id          INTEGER NOT NULL REFERENCES orgs(id),
+    name            TEXT NOT NULL,
+    domain          TEXT,
+    industry        TEXT,
+    segment         TEXT,                   -- SMB | Mid-Market | Enterprise
+    employees       INTEGER,
+    website         TEXT,
+    owner_rep_id    INTEGER REFERENCES reps(id),
+    notes           TEXT,
+    external_id     TEXT,
+    external_source TEXT,
+    created_at      TEXT NOT NULL,
+    UNIQUE (org_id, name)
+);
+CREATE INDEX idx_accounts_org ON accounts(org_id, name);
+
+-- A person at an account. `role_type` is the field that earns its keep: a deal
+-- where every contact is the same single champion is a deal one job change away
+-- from dying, and the health engine reads this to say so.
+CREATE TABLE contacts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id          INTEGER NOT NULL REFERENCES orgs(id),
+    account_id      INTEGER NOT NULL REFERENCES accounts(id),
+    name            TEXT NOT NULL,
+    title           TEXT,
+    email           TEXT,
+    phone           TEXT,
+    -- champion | economic_buyer | technical | influencer | blocker | user
+    role_type       TEXT NOT NULL DEFAULT 'influencer',
+    is_primary      INTEGER NOT NULL DEFAULT 0,
+    last_contacted  TEXT,
+    notes           TEXT,
+    external_id     TEXT,
+    external_source TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX idx_contacts_org_account ON contacts(org_id, account_id);
+
 -- Open and closed opportunities. `close_date_original` is the field that makes
 -- slippage visible: a deal pushed three times has a story a snapshot can't tell.
 CREATE TABLE deals (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     org_id              INTEGER NOT NULL REFERENCES orgs(id),
     rep_id              INTEGER NOT NULL REFERENCES reps(id),
+    -- `account` (the text name) is kept alongside `account_id` deliberately. It is
+    -- what an import gives you before an account row exists, and it keeps every
+    -- existing query working while the link is populated.
     account             TEXT NOT NULL,
+    account_id          INTEGER REFERENCES accounts(id),
     amount              INTEGER NOT NULL,
     stage               TEXT NOT NULL,      -- discovery | demo | proposal | negotiation | closed_won | closed_lost
     probability         INTEGER NOT NULL DEFAULT 0,

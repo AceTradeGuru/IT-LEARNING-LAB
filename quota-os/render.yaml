@@ -15,10 +15,14 @@
 # run:  python3 -c "from quota_db import create_tables; create_tables()"
 
 databases:
+  # QuotaOS gets its own database, deliberately. CarrierGuard (in this same repo)
+  # also defines a `users` table, so pointing both apps at one instance would have
+  # them fighting over it. Deploy each blueprint separately and never hand-edit
+  # DATABASE_URL to share — the isolation is only as good as that discipline.
   - name: quotaos-db
     databaseName: quotaos
     plan: basic-256mb        # ~$7/mo. Raise before you have real load.
-    postgresMajorVersion: "16"
+    postgresMajorVersion: "17"   # matches carrierguard-db
 
 services:
   - type: web

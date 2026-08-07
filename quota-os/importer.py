@@ -366,16 +366,38 @@ def apply(conn, org_id, rows, source, user_id, create_missing_reps=False):
     if created_reps:
         p = plan(conn, org_id, rows, source, create_missing_reps=False)
 
+    # Accounts, before deals, so every imported deal lands on a real company
+    # record rather than a bare string. Matched case-insensitively on name — CRM
+    # exports are full of "Acme Corp" and "acme corp" meaning the same building.
+    existing_accounts = {}
+    for a in conn.execute("SELECT id, name FROM accounts WHERE org_id = ?", (org_id,)):
+        existing_accounts[_norm(a["name"])] = a["id"]
+
+    accounts_created = 0
+    for c in p["creates"] + p["updates"]:
+        label = (c.get("account") or c.get("name") or "").strip()
+        if not label or _norm(label) in existing_accounts:
+            continue
+        aid = conn.execute(
+            """INSERT INTO accounts (org_id, name, owner_rep_id, external_source, created_at)
+               VALUES (?,?,?,?,?)""",
+            (org_id, label, c.get("rep_id"), source, today),
+        ).lastrowid
+        existing_accounts[_norm(label)] = aid
+        accounts_created += 1
+
     n_created = 0
     for c in p["creates"]:
         created = (c.get("created_date") or c["close_date"]).isoformat()
         conn.execute(
-            """INSERT INTO deals (org_id, rep_id, account, amount, stage, probability,
-                                  created_date, close_date, close_date_original,
-                                  last_activity_date, next_step, source,
-                                  external_id, external_source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (org_id, c["rep_id"], c.get("account") or c.get("name"), c["amount"],
+            """INSERT INTO deals (org_id, rep_id, account, account_id, amount, stage,
+                                  probability, created_date, close_date,
+                                  close_date_original, last_activity_date, next_step,
+                                  source, external_id, external_source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (org_id, c["rep_id"], c.get("account") or c.get("name"),
+             existing_accounts.get(_norm(c.get("account") or c.get("name") or "")),
+             c["amount"],
              c["stage"],
              c["probability"] if c["probability"] is not None
              else _DEFAULT_PROBABILITY[c["stage"]],
@@ -410,6 +432,7 @@ def apply(conn, org_id, rows, source, user_id, create_missing_reps=False):
         "unchanged": len(p["updates"]) - n_updated,
         "skipped": len(p["skips"]),
         "reps_created": len(created_reps),
+        "accounts_created": accounts_created,
         "skip_reasons": _tally(p["skips"]),
     }
 

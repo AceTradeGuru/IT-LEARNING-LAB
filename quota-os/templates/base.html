@@ -273,6 +273,7 @@
       <a href="{{ url_for('dashboard') }}" class="{{ 'on' if request.endpoint == 'dashboard' }}">Dashboard</a>
       <a href="{{ url_for('org_view') }}" class="{{ 'on' if request.endpoint in ('org_view','rep_detail') }}">Org &amp; reps</a>
       <a href="{{ url_for('pipeline') }}" class="{{ 'on' if request.endpoint == 'pipeline' }}">Pipeline</a>
+      <a href="{{ url_for('accounts') }}" class="{{ 'on' if request.endpoint in ('accounts','account_detail','account_new') }}">Accounts</a>
       <div class="navgroup">The bench</div>
       <a href="{{ url_for('training') }}" class="{{ 'on' if request.endpoint == 'training' }}">Training &amp; certs</a>
       {# Hiring is manager+ only — a rep has no business in the candidate pool. #}
@@ -287,6 +288,7 @@
         <a href="{{ url_for('data_import') }}" class="{{ 'on' if request.endpoint in ('data_import','import_preview') }}">Import from CRM</a>
         <div class="navgroup">Settings</div>
         <a href="{{ url_for('settings_audit') }}" class="{{ 'on' if request.endpoint == 'settings_audit' }}">AI decision log</a>
+        <a href="{{ url_for('settings_compliance') }}" class="{{ 'on' if request.endpoint == 'settings_compliance' }}">Compliance</a>
         {% if has_role('owner') %}
           <a href="{{ url_for('settings_users') }}" class="{{ 'on' if request.endpoint == 'settings_users' }}">Users</a>
         {% endif %}

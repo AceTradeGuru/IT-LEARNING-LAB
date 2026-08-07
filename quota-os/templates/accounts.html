@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Accounts{% endblock %}
+{% block crumb %}Accounts{% endblock %}
+
+{% block content %}
+<div class="row" style="justify-content:space-between">
+  <div>
+    <h1>Accounts</h1>
+    <p class="sub">
+      Companies you sell to, sorted by open pipeline. <b>Contacts</b> is the column
+      to read: an account carrying real money with one known person is a deal one
+      job change away from dying.
+    </p>
+  </div>
+  {% if has_role('manager') %}
+    <a class="btn btn-primary" href="{{ url_for('account_new') }}">New account</a>
+  {% endif %}
+</div>
+
+<form method="get" class="card row" style="gap:.7rem">
+  <input name="q" value="{{ q }}" placeholder="Search accounts…" style="max-width:320px">
+  <button class="btn btn-ghost btn-sm">Search</button>
+  {% if q %}<a class="tiny muted" href="{{ url_for('accounts') }}">clear</a>{% endif %}
+  <span class="tiny muted">{{ accounts|length }} shown</span>
+</form>
+
+<div class="card pad0">
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Account</th><th>Industry</th><th>Segment</th><th>Owner</th>
+               <th class="num">Contacts</th><th class="num">Open deals</th>
+               <th class="num">Open value</th></tr></thead>
+    <tbody>
+    {% for a in accounts %}
+      <tr>
+        <td><a href="{{ url_for('account_detail', account_id=a.id) }}"><b>{{ a.name }}</b></a>
+          {% if a.domain %}<div class="tiny muted">{{ a.domain }}</div>{% endif %}</td>
+        <td class="tiny">{{ a.industry or '—' }}</td>
+        <td class="tiny">{{ a.segment or '—' }}</td>
+        <td class="tiny">{{ a.owner_name or '—' }}</td>
+        <td class="num">
+          {% if a.contacts <= 1 and a.open_deals %}
+            <span class="badge at_risk">{{ a.contacts }}</span>
+          {% else %}{{ a.contacts }}{% endif %}
+        </td>
+        <td class="num tiny">{{ a.open_deals }}</td>
+        <td class="num">{{ a.open_value|money if a.open_value else '—' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7"><div class="empty">No accounts match.</div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}
