@@ -27,6 +27,7 @@
 
 PRAGMA foreign_keys = ON;
 
+DROP TABLE IF EXISTS imports;
 DROP TABLE IF EXISTS ai_spend;
 DROP TABLE IF EXISTS audit_log;
 DROP TABLE IF EXISTS interviews;
@@ -111,6 +112,24 @@ CREATE TABLE ai_spend (
 );
 CREATE INDEX idx_ai_spend_org ON ai_spend(org_id, month);
 
+-- An uploaded export, held between preview and apply. Storing the file rather
+-- than round-tripping it through a form means the plan the user approves is
+-- recomputed from the same bytes that were previewed. `raw_csv` is customer
+-- personal data — purge applied imports on the same clock as candidates.
+CREATE TABLE imports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id      INTEGER NOT NULL REFERENCES orgs(id),
+    user_id     INTEGER REFERENCES users(id),
+    source      TEXT NOT NULL,          -- salesforce | hubspot | generic
+    filename    TEXT,
+    raw_csv     TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'preview',   -- preview | applied | discarded
+    report_json TEXT,
+    created_at  TEXT NOT NULL,
+    applied_at  TEXT
+);
+CREATE INDEX idx_imports_org ON imports(org_id, created_at);
+
 -- ---------------------------------------------------------------- the floor --
 
 -- One row per human on the sales org chart, VPs and managers included. `manager_id`
@@ -131,6 +150,10 @@ CREATE TABLE reps (
     quota_annual    INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL DEFAULT 'active',
     notes           TEXT,
+    -- Identity in the system this row came from, so a re-import updates the same
+    -- rep rather than creating a second one.
+    external_id     TEXT,
+    external_source TEXT,               -- salesforce | hubspot
     UNIQUE (org_id, email)
 );
 CREATE INDEX idx_reps_org ON reps(org_id, status);
@@ -150,9 +173,16 @@ CREATE TABLE deals (
     close_date_original TEXT NOT NULL,
     last_activity_date  TEXT,
     next_step           TEXT,
-    source              TEXT
+    source              TEXT,
+    -- The opportunity id in Salesforce or the record id in HubSpot. This is what
+    -- makes importing the same export twice safe, and it is why `close_date`
+    -- can move on a re-import while `close_date_original` stays put — which is
+    -- how slippage becomes visible in QuotaOS and never was in the source CRM.
+    external_id         TEXT,
+    external_source     TEXT
 );
 CREATE INDEX idx_deals_org_rep ON deals(org_id, rep_id, stage);
+CREATE UNIQUE INDEX idx_deals_external ON deals(org_id, external_source, external_id);
 
 -- Weekly activity rollup. Raw call logs are noise; the week is the unit a manager
 -- actually coaches against.

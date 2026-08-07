@@ -35,6 +35,7 @@ from markupsafe import Markup, escape
 
 import ai_engine
 import auth
+import importer
 from config import Config, validate
 from health_engine import (evaluate_org, evaluate_rep, pipeline_by_stage,
                            quarter_bounds, quarter_label, recommended_courses)
@@ -718,6 +719,137 @@ def session_signup(session_id):
     conn.close()
     flash(f"{rep['name']} is booked into the session.")
     return redirect(url_for("training"))
+
+
+# ----------------------------------------------------------------- import --
+
+@app.route("/import", methods=["GET", "POST"])
+@auth.role_required("admin")
+def data_import():
+    """
+    Upload a Salesforce or HubSpot export.
+
+    Admin-only: an import writes deals and can create reps across the whole org,
+    which is not a per-manager action.
+    """
+    conn = get_connection()
+    org_id = auth.current_org_id()
+
+    if request.method == "POST":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            conn.close()
+            flash("Choose a CSV export first.")
+            return redirect(url_for("data_import"))
+        try:
+            text = upload.read().decode("utf-8-sig", errors="replace")
+        except Exception:
+            conn.close()
+            flash("That file could not be read as text. Export as CSV, not XLSX.")
+            return redirect(url_for("data_import"))
+
+        rows, source, headers = importer.parse_csv(text)
+        if not rows:
+            conn.close()
+            flash("No data rows found in that file.")
+            return redirect(url_for("data_import"))
+
+        import_id = conn.execute(
+            """INSERT INTO imports (org_id, user_id, source, filename, raw_csv, status,
+                                    created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (org_id, g.user["id"], source, upload.filename[:200], text, "preview",
+             datetime.now().isoformat(timespec="seconds")),
+        ).lastrowid
+        conn.commit()
+        conn.close()
+        return redirect(url_for("import_preview", import_id=import_id))
+
+    history = conn.execute(
+        """SELECT i.*, u.name user_name FROM imports i
+             LEFT JOIN users u ON u.id = i.user_id AND u.org_id = i.org_id
+            WHERE i.org_id = ? ORDER BY i.created_at DESC LIMIT 20""",
+        (org_id,),
+    ).fetchall()
+    parsed = []
+    for h in history:
+        parsed.append({"row": h,
+                       "report": json.loads(h["report_json"]) if h["report_json"] else None})
+    imported = conn.execute(
+        "SELECT COUNT(*) n FROM deals WHERE org_id = ? AND external_id IS NOT NULL",
+        (org_id,),
+    ).fetchone()["n"]
+    conn.close()
+    return render_template("import.html", history=parsed, imported=imported)
+
+
+def _load_import(conn, import_id):
+    row = conn.execute("SELECT * FROM imports WHERE id = ? AND org_id = ?",
+                       (import_id, auth.current_org_id())).fetchone()
+    if row is None:
+        abort(404)
+    return row
+
+
+@app.route("/import/<int:import_id>")
+@auth.role_required("admin")
+def import_preview(import_id):
+    """Show exactly what applying this file would do. Writes nothing."""
+    conn = get_connection()
+    imp = _load_import(conn, import_id)
+    create_reps = request.args.get("create_reps") == "1"
+    rows, source, headers = importer.parse_csv(imp["raw_csv"])
+    p = importer.plan(conn, auth.current_org_id(), rows, source,
+                      create_missing_reps=create_reps)
+    report = json.loads(imp["report_json"]) if imp["report_json"] else None
+    conn.close()
+    return render_template("import_preview.html", imp=imp, plan=p, headers=headers,
+                           create_reps=create_reps, report=report,
+                           our_stages=importer.OUR_STAGES)
+
+
+@app.route("/import/<int:import_id>/apply", methods=["POST"])
+@auth.role_required("admin")
+def import_apply(import_id):
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    imp = _load_import(conn, import_id)
+    if imp["status"] == "applied":
+        conn.close()
+        flash("That import has already been applied.")
+        return redirect(url_for("import_preview", import_id=import_id))
+
+    create_reps = request.form.get("create_reps") == "1"
+    rows, source, _ = importer.parse_csv(imp["raw_csv"])
+    report = importer.apply(conn, org_id, rows, source, g.user["id"],
+                            create_missing_reps=create_reps)
+    conn.execute(
+        "UPDATE imports SET status = 'applied', report_json = ?, applied_at = ? "
+        "WHERE id = ? AND org_id = ?",
+        (json.dumps(report), datetime.now().isoformat(timespec="seconds"),
+         import_id, org_id))
+    auth.audit(conn, "data.import", entity=f"import:{import_id}", detail=report)
+    conn.commit()
+    conn.close()
+    flash(f"Imported from {source.title()}: {report['created']} deals created, "
+          f"{report['updated']} updated, {report['skipped']} skipped.")
+    return redirect(url_for("import_preview", import_id=import_id))
+
+
+@app.route("/import/<int:import_id>/discard", methods=["POST"])
+@auth.role_required("admin")
+def import_discard(import_id):
+    """Drop an unapplied upload, including the raw file. It is customer PII."""
+    conn = get_connection()
+    org_id = auth.current_org_id()
+    _load_import(conn, import_id)
+    conn.execute("UPDATE imports SET status = 'discarded', raw_csv = '' "
+                 "WHERE id = ? AND org_id = ? AND status != 'applied'",
+                 (import_id, org_id))
+    conn.commit()
+    conn.close()
+    flash("Upload discarded and the file contents removed.")
+    return redirect(url_for("data_import"))
 
 
 # ----------------------------------------------------------------- hiring --

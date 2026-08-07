@@ -68,6 +68,33 @@ them. They become a row on the org chart with a ramp window and every mandatory
 certification track enrolled on day one. Go back to the dashboard and the new
 seat is there, graded on a ramp curve.
 
+## Import from Salesforce or HubSpot
+
+`/import` (admin only) takes a CSV export from either platform and lands it in
+QuotaOS. It reads the header row to work out which system it came from, maps their
+pipeline stages onto our six, matches deal owners to reps by email then name, and
+shows a full preview — what it will create, update, and skip, with a reason on
+every skipped row — **before it writes anything**.
+
+Unrecognized stages and unknown owners are surfaced rather than guessed at. You can
+opt to create the missing reps, in which case they arrive with zero quota so they
+don't distort org attainment until you set one.
+
+**Re-importing is the point, not a hazard.** Deals are keyed on the Salesforce
+opportunity id or HubSpot record id, so applying the same export twice updates in
+place. And because no CRM export contains the date a deal was *originally* forecast
+to close, the first import sets `close_date_original = close_date` — then every
+later import moves `close_date` and leaves the original alone. That is how a deal
+pushed three times shows up as slippage in QuotaOS when the CRM it came from could
+never show it.
+
+A worked example, straight from the test run: import a Salesforce export, then push
+one deal a month and discount it, then re-import. Result — `0 created, 1 updated,
+5 unchanged, 0 duplicates`, and Greg Nowak's health score drops with a new signal:
+
+> **Close dates are moving** — 1 of 3 deals have slipped, the worst by 30 days.
+> Repeated pushes usually mean the buyer's timeline was never real.
+
 ## The health engine
 
 `health_engine.py` scores each rep 0–100 by asking the six questions a good
@@ -158,6 +185,11 @@ app.py            Flask routes — the floor, the bench, the funnel
 health_engine.py  Rep and org scoring. No AI: a manager assigning remediation
                   wants the same answer every time.
 ai_engine.py      Claude-backed hiring intelligence + offline fallbacks
+importer.py       Salesforce / HubSpot CSV import — sniffing, stage mapping,
+                  dry-run planning, idempotent apply
+auth.py           Login, roles, tenant scoping, CSRF, audit trail
+db.py             SQLite locally, Postgres in production
+config.py         Environment-driven settings with a fail-fast production guard
 quota_db.py       Schema build and demo seed
 schema.sql        Twelve tables across the three surfaces
 templates/        Jinja templates, one inline design system in base.html
