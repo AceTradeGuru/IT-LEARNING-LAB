@@ -47,6 +47,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-costs", action="store_true",
                    help="disable spread and slippage (shows how much of the result is cost)")
     p.add_argument("--trades", action="store_true", help="print the trade log")
+    p.add_argument("--model", default=None, metavar="PATH",
+                   help="trained model JSON from train_model.py; filters signals below --threshold")
+    p.add_argument("--threshold", type=float, default=None,
+                   help="minimum model score to take a trade (default: the model's recommended threshold)")
     p.add_argument("--list-firms", action="store_true", help="list available firm profiles and exit")
     return p.parse_args()
 
@@ -94,12 +98,33 @@ def main() -> int:
         else:
             data[symbol] = generate_bars(instrument, start, args.days, 1, seed=args.seed + hash(symbol) % 1000)
 
+    signal_filter = None
+    if args.model:
+        from bot.ml import MLSignalFilter, load_model
+
+        model, meta = load_model(args.model)
+        threshold = args.threshold
+        if threshold is None:
+            threshold = meta.get("recommended_threshold") or 0.5
+        if not meta.get("usable", False):
+            print(f"WARNING: {args.model} is marked usable=false in its metadata "
+                  f"(walk-forward AUC {meta.get('walk_forward_auc')}, "
+                  f"permutation p={meta.get('permutation_p_value')}).")
+            print("         Filtering with it is not expected to help. Continuing anyway.")
+        if meta.get("trained_on") == "synthetic":
+            print("WARNING: this model was trained on synthetic data and cannot "
+                  "generalise to real markets.")
+        signal_filter = MLSignalFilter(
+            model=model, threshold=threshold, window=config.risk.trading_window
+        )
+        print(f"ML filter active: {os.path.basename(args.model)} at threshold {threshold:.2f}")
+
     fills = FillModel(
         stop_slippage_atr=0.0 if args.no_costs else args.stop_slippage_atr,
         entry_slippage_atr=0.0 if args.no_costs else 0.03,
         use_spread=not args.no_costs,
     )
-    result = Backtester(config, fills, args.strategies).run(data)
+    result = Backtester(config, fills, args.strategies, signal_filter).run(data)
 
     title = "BACKTEST (SYNTHETIC DATA)" if not csv_map else "BACKTEST"
     print(backtest_report(result, config, title))

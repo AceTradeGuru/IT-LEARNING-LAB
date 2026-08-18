@@ -114,6 +114,11 @@ def backtest_report(result, config: BotConfig, title: str = "BACKTEST") -> str:
             L.append(f"    {reason:<22}{count:>8}   {100 * count / total:5.1f}%")
         L.append("")
 
+    if getattr(result, "ml_summary", ""):
+        L.append("  ML FILTER")
+        L.append(f"    {result.ml_summary}")
+        L.append("")
+
     # --- what the guard blocked ---
     if result.rejections:
         L.append("  RISK GUARD — signals blocked")

@@ -10,6 +10,7 @@ pip install -r requirements.txt
 python scripts/run_backtest.py --firm futures_50k_trailing --symbols MES MNQ --days 40
 python scripts/monte_carlo.py  --firm futures_50k_trailing --symbols MES MNQ --runs 50
 python scripts/run_paper.py    --firm ftmo_100k --symbols EURUSD --days 10 --verbose
+python scripts/train_model.py  --firm futures_50k_trailing --symbols MES --days 250
 pytest -q
 ```
 
@@ -35,6 +36,35 @@ expected result: synthetic data contains no exploitable edge, so a momentum
 system trading it pays costs and bleeds. **A positive backtest here would be
 evidence of a bug, not of an edge.** Whether these strategies work depends
 entirely on real market data, which you supply with `--csv`.
+
+---
+
+## Your trading window
+
+The bot only trades **08:00–12:00 America/Chicago**, configured in
+`config/risk.yaml`. Three times, not two, because "stop trading at noon" and
+"be flat at noon" are different rules:
+
+```yaml
+trading_window:
+  timezone: "America/Chicago"
+  start:      "08:00"   # first moment a position may be opened
+  last_entry: "11:00"   # after this, manage only — no new positions
+  end:        "12:00"   # everything flattened, unconditionally
+```
+
+The window is a hard constraint layered *on top of* each instrument's session —
+the bot trades only where the two overlap. For MES (08:30–15:00 CT) that leaves
+08:30–11:00 for entries, which is the highest-momentum stretch of the equity
+session. For FX it captures the London/NY overlap.
+
+`end` overrides the firm's overnight policy: even on a firm that permits
+overnight holds, nothing stays live past noon, because you are not at the desk
+to manage it.
+
+The timezone is an IANA name, not "CST", so CST/CDT transitions are handled
+automatically. Writing "CST" would silently shift your window by an hour twice
+a year.
 
 ---
 
@@ -132,6 +162,136 @@ Thresholds expressed as a fraction of price get **per-asset-class overrides**,
 because index futures run ~0.17% ATR on 5-minute bars while EURUSD runs ~0.06%.
 A single global threshold silently filters out every forex signal — which it did,
 until the overrides went in.
+
+---
+
+## Machine learning
+
+Two things, both chosen because they are tractable on a few hundred noisy
+samples. Neither of them predicts price.
+
+### 1. Trade filtering (meta-labelling)
+
+The strategy still decides *where* a setup exists. The model only estimates
+**P(this particular signal reaches its target before its stop)** and drops the
+weak ones. That is a far easier problem than generating entries from scratch,
+where a model must be right about direction, timing and geometry at once.
+
+22 scale-free features per signal — ADX, ATR expansion, EMA structure in ATR
+units, VWAP distance, volume ratio, bar shape, momentum over two horizons,
+time of day, minutes left in your window. Everything is divided by ATR or by
+price so a model trained on MES can say something about EURUSD.
+
+Labels come from **triple-barrier** forward simulation with the *same
+pessimism as the execution engine*: when one bar spans both barriers, the stop
+is assumed first. If labelling were optimistic while execution is pessimistic,
+the model would be trained to prefer exactly the trades that lose in reality.
+
+The filter sits **before** the risk guard, never instead of it. It can only
+remove trades, so a model bug costs opportunity, never risk-limit compliance.
+No model loaded means the bot degrades to the rule-based strategy; a scoring
+error means that signal is rejected, because an unscored signal is unknown and
+unknown must not count as good.
+
+### 2. Regime detection
+
+k-means over six regime features — ADX, ATR level, ATR expansion, trend
+extension, directional persistence, and an efficiency ratio (net move ÷ summed
+move; 1.0 is a straight line, 0 is chop). Fitted on a training window and
+applied forward, never re-fit on the bars it labels. A dwell filter suppresses
+flips shorter than 10 bars so the labels do not thrash.
+
+Clusters get interpreted names from where their centroids sit:
+
+```
+regime                        bars   share    ADX  ATRexp  effic
+range / quiet                 6642   42.7%   20.2    0.83   0.22
+trending / quiet              3262   21.0%   38.1    1.01   0.42
+choppy / volatile             2550   16.4%   19.9    1.15   0.16
+trending / expanding          3096   19.9%   24.8    1.33   0.21
+```
+
+And then the actionable part — where the strategy actually works:
+
+```
+MOMENTUM BREAKOUT PERFORMANCE BY REGIME (R per trade, costs excluded)
+  trending / quiet               110     0.258     43%
+  trending / expanding            22     0.046     36%
+  range / quiet                   68    -0.072     31%
+```
+
+Momentum makes money in trends and loses it in ranges, which is what theory
+says it should do. That is the kind of finding worth acting on — after you have
+confirmed it holds out of sample on your own data.
+
+### How this is kept honest
+
+Trading ML fails in specific, well-known ways, and each has a countermeasure
+wired into `scripts/train_model.py`:
+
+| Failure mode | Countermeasure |
+|---|---|
+| Training on the future | **Walk-forward only.** Train on the past, test on the next block. Never random k-fold. |
+| Labels leaking backwards | **Purging.** A signal at 10:00 may not resolve until 10:40; if the test fold starts at 10:20 that training label was partly set by test-fold bars, so it is dropped. Plus a 60-minute **embargo**. |
+| Finding patterns in noise | **Permutation test.** Re-run the identical pipeline on shuffled labels 20 times. If shuffled labels reproduce your AUC, it is noise. |
+| Good AUC, no money | **Threshold sweep** showing what each cutoff does to win rate, expectancy, and how many trades survive. |
+| Overfitting a tiny sample | Refuses to model fewer than 200 samples. |
+| Silent lookahead in features | Tests truncate the tape and require identical feature values. |
+
+The script has to clear three gates before recommending a model — AUC ≥ 0.55,
+permutation p < 0.10, and a threshold that lifts expectancy while keeping ≥25%
+of trades. On synthetic data it correctly refuses:
+
+```
+PERMUTATION TEST (same pipeline, shuffled labels)
+  real AUC 0.519 | shuffled mean AUC 0.497 | p = 0.190
+  -> shuffled labels reproduce this AUC 19% of the time. NOISE.
+
+VERDICT: DO NOT TRADE THIS MODEL — AUC 0.519 < 0.55; p = 0.190 > 0.1.
+```
+
+Note the trap it caught: the threshold sweep showed a tempting **+0.116R lift
+at threshold 0.45**, keeping 23% of trades. Taken alone that looks like a
+discovery. The permutation test says it is noise — and that is exactly the
+number that would have gotten traded without one.
+
+The pipeline is verified in both directions. `test_pipeline_detects_an_injected_
+edge` puts a real relationship in the data and requires the validator to find
+it; `test_pipeline_reports_noise_as_noise` requires it not to find one that
+isn't there:
+
+```
+NO edge (pure noise)     AUC 0.514  p=0.250  -> DO NOT TRADE
+REAL injected edge       AUC 0.797  p=0.062  -> TRADE IT
+```
+
+A validator that only ever says "no edge" is not a validator.
+
+### Using a trained model
+
+```bash
+python scripts/train_model.py --firm ftmo_100k --symbols EURUSD \
+    --csv EURUSD=data/eurusd_1m.csv --model gbt --out models/eurusd.json
+
+python scripts/run_backtest.py --firm ftmo_100k --symbols EURUSD \
+    --csv EURUSD=data/eurusd_1m.csv --model models/eurusd.json
+```
+
+Models store their walk-forward AUC, permutation p-value and a `usable` flag in
+their metadata. Loading one that failed validation prints a warning and keeps
+going — your call, loudly flagged.
+
+Two model types: `logistic` (interpretable coefficients — start here; if the
+linear model finds nothing, be very suspicious of a nonlinear one that does)
+and `gbt` (gradient-boosted trees, captures interactions, overfits more
+eagerly). Both are implemented in NumPy, so the dependency surface stays at
+numpy + PyYAML.
+
+**Realistically:** ~1–3 trades a day in a 3-hour window is roughly 400 trades a
+year. That is a thin sample for ML. Expect to need 2+ years of real 1-minute
+data before the filter says anything trustworthy, and expect the honest answer
+to often be "no usable edge". The pipeline is built to tell you that rather
+than to sell you a model.
 
 ---
 
@@ -242,15 +402,17 @@ bot/
   risk/          rules (drawdown models), account, sizing, guard
   engine/        fill model, portfolio, backtest, live loop
   brokers/       adapter interface, paper broker, disabled live stubs
+  ml/            features, triple-barrier labelling, models, purged
+                 walk-forward validation, regime detection, signal filter
   reporting/     metrics and reports
-scripts/         run_backtest.py, run_paper.py, monte_carlo.py
-tests/           70 tests
+scripts/         run_backtest.py, run_paper.py, monte_carlo.py, train_model.py
+tests/           105 tests
 ```
 
 ## Tests
 
 ```bash
-pytest -q                    # 70 tests
+pytest -q                    # 105 tests
 pytest tests/test_risk.py -q # the ones that matter most
 ```
 
@@ -276,6 +438,12 @@ assumption, so it is asserted rather than merely intended.
   are static; the engine does not compute rolling correlation.
 - **Synthetic data is not a market.** It has regimes, volatility clustering,
   intraday seasonality, and fat tails, but no real structure to exploit.
+- **The ML layer needs far more data than a few months provides.** At 1–3
+  trades a day it takes years to accumulate a sample worth modelling.
+- **Regime labels are unsupervised**, so the cluster count `k` is a choice, not
+  a discovery. Different `k` gives different regimes.
+- **The model does not adapt online.** It is trained offline and loaded; there
+  is no incremental refit as new trades close.
 
 ## Disclaimer
 

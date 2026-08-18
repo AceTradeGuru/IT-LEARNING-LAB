@@ -152,6 +152,15 @@ class RiskGuard:
         if halt:
             return RiskDecision.reject(f"halted: {halt}")
 
+        # --- personal trading window ---
+        # Checked before the instrument session because it is the tighter of
+        # the two and gives the clearer rejection message.
+        personal = self.risk_cfg.trading_window
+        if personal is not None and not personal.can_enter(ts):
+            return RiskDecision.reject(
+                f"outside personal trading window ({personal.describe()})"
+            )
+
         # --- session / calendar ---
         window = session_window(instrument, ts, self.risk_cfg.flatten_before_close_minutes)
         if not window.open_ok:
@@ -248,6 +257,12 @@ class RiskGuard:
 
     def should_flatten(self, instrument: Instrument, ts: datetime) -> bool:
         """True when open positions must be closed regardless of their stops."""
+        # The personal window overrides the firm's overnight policy. If you are
+        # not at the desk after noon, a position must not be live at 12:01 —
+        # even on a firm that permits overnight holds.
+        personal = self.risk_cfg.trading_window
+        if personal is not None and personal.must_flatten(ts):
+            return True
         if self.rules.allow_overnight:
             return False
         window = session_window(instrument, ts, self.risk_cfg.flatten_before_close_minutes)

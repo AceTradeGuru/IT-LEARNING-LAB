@@ -59,3 +59,24 @@ guards:
   # Skip trading around high-impact news if a calendar is supplied.
   news_blackout_minutes_before: 2
   news_blackout_minutes_after: 3
+
+# Your personal trading window. This is a HARD constraint layered on top of
+# each instrument's session: the bot may only trade where the two overlap.
+#
+# Three times, not two, because "stop trading at noon" and "be flat at noon"
+# are different rules and conflating them is how you end up holding a loser
+# into a close you are not watching:
+#
+#   start       first moment a new position may be opened
+#   last_entry  after this, existing positions are managed but no new ones open
+#   end         everything is flattened, unconditionally
+#
+# Timezone is an IANA name so CST/CDT switches are handled for you. Do not
+# write "CST" — daylight saving would silently shift your window by an hour
+# twice a year.
+trading_window:
+  enabled: true
+  timezone: "America/Chicago"
+  start: "08:00"
+  last_entry: "11:00"
+  end: "12:00"

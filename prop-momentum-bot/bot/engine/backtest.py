@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from ..config import BotConfig
 from ..data.feed import align_feeds, resample
@@ -28,6 +28,9 @@ from ..risk.guard import RiskGuard, session_window
 from ..signals import IndicatorCache, make_strategy
 from .broker_sim import FillModel
 from .portfolio import Portfolio
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from ..ml.filter import MLSignalFilter
 
 
 @dataclass
@@ -48,6 +51,8 @@ class BacktestResult:
     rejections: Dict[str, int] = field(default_factory=dict)
     signals_generated: int = 0
     signals_taken: int = 0
+    ml_blocked: int = 0
+    ml_summary: str = ""
     start_ts: Optional[datetime] = None
     end_ts: Optional[datetime] = None
 
@@ -76,11 +81,16 @@ class Backtester:
         config: BotConfig,
         fills: Optional[FillModel] = None,
         strategies: Optional[Sequence[str]] = None,
+        signal_filter: Optional["MLSignalFilter"] = None,
     ) -> None:
         self.config = config
         self.fills = fills or FillModel()
         enabled = [n for n, p in config.strategies.items() if p.enabled]
         self.strategy_names = list(strategies) if strategies else enabled
+        # Optional ML filter. It sits ahead of the risk guard and can only
+        # REMOVE trades — it never authorises one, so a model bug costs
+        # opportunity rather than risk-limit compliance.
+        self.signal_filter = signal_filter
 
     def run(
         self,
@@ -112,6 +122,10 @@ class Backtester:
                 params = cfg.strategies[sname]
                 bars = resample(base, params.timeframe_minutes) if params.timeframe_minutes > 1 else base
                 strat = make_strategy(sname, params, instrument)
+                if self.signal_filter is not None and self.signal_filter.active:
+                    from ..ml.filter import FilteredStrategy
+
+                    strat = FilteredStrategy(strat, self.signal_filter)
                 contexts[(symbol, sname)] = {
                     "strategy": strat,
                     "params": params,
@@ -211,6 +225,11 @@ class Backtester:
         if result.end_ts:
             account.mark(result.end_ts, 0.0)
         account.finalize()
+
+        if self.signal_filter is not None and self.signal_filter.active:
+            stats = self.signal_filter.stats
+            result.ml_blocked = stats.blocked_by_model + stats.blocked_by_regime
+            result.ml_summary = stats.summary()
         return result
 
 

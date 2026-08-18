@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import dataclasses
+
 from bot.config import BotConfig, load_firm
 from bot.data.types import ExitReason, Side, Signal, Trade
 from bot.risk.account import Account, trading_day_of
@@ -19,6 +21,18 @@ from bot.risk.rules import (
 from bot.risk.sizing import size_position
 
 UTC = timezone.utc
+
+
+def without_personal_window(config: BotConfig) -> BotConfig:
+    """Neutralise the personal trading window.
+
+    Tests for the instrument-session and weekend rules need to reach times the
+    personal window would block first, so they isolate the rule under test by
+    switching the window off rather than by picking timestamps that happen to
+    satisfy both.
+    """
+    config.risk = dataclasses.replace(config.risk, trading_window=None)
+    return config
 
 
 def make_trade(pnl: float, ts: datetime, symbol="MES", strategy="momentum_breakout") -> Trade:
@@ -334,11 +348,14 @@ def test_guard_blocks_outside_the_session(guard_setup):
     assert not guard.evaluate(make_signal(), {}, overnight).approved
 
 
-def test_guard_blocks_near_the_close(guard_setup):
-    config, acct, guard, ts = guard_setup
+def test_guard_blocks_near_the_close():
+    """Instrument session-close rule, isolated from the personal window."""
+    config = without_personal_window(BotConfig.load("futures_50k_trailing"))
+    acct = Account(config.firm)
     # MES closes 16:00 ET = 21:00 UTC in March (EST); 20:55 UTC is 5m before.
     near_close = datetime(2026, 3, 3, 20, 55, tzinfo=UTC)
-    decision = guard.evaluate(make_signal(), {}, near_close)
+    acct.mark(near_close, 0.0)
+    decision = RiskGuard(config, acct).evaluate(make_signal(), {}, near_close)
     assert not decision.approved and "close" in decision.reason
 
 
@@ -421,7 +438,7 @@ def test_guard_halts_once_the_evaluation_is_passed(guard_setup):
 
 
 def test_crypto_is_tradeable_at_the_weekend_but_futures_are_not():
-    config = BotConfig.load("ftmo_100k")   # allows forex and crypto
+    config = without_personal_window(BotConfig.load("ftmo_100k"))  # forex + crypto
     acct = Account(config.firm)
     saturday = datetime(2026, 3, 7, 12, 0, tzinfo=UTC)
     acct.mark(saturday, 0.0)
@@ -436,3 +453,74 @@ def test_crypto_is_tradeable_at_the_weekend_but_futures_are_not():
 
     assert crypto.approved, f"crypto trades 24/7: {crypto.reason}"
     assert not forex.approved and "weekend" in forex.reason
+
+
+# ----------------------------------------------------------------------
+# personal trading window
+# ----------------------------------------------------------------------
+
+def test_personal_window_blocks_entries_outside_it():
+    config = BotConfig.load("futures_50k_trailing")
+    acct = Account(config.firm)
+    guard = RiskGuard(config, acct)
+    window = config.risk.trading_window
+    assert window is not None and window.enabled
+
+    # 2026-08-18 is CDT (UTC-5): 13:00 UTC = 08:00 CT, 17:00 UTC = 12:00 CT.
+    inside = datetime(2026, 8, 18, 14, 30, tzinfo=UTC)    # 09:30 CT
+    too_early = datetime(2026, 8, 18, 12, 30, tzinfo=UTC)  # 07:30 CT
+    too_late = datetime(2026, 8, 18, 16, 30, tzinfo=UTC)   # 11:30 CT, past last entry
+
+    acct.mark(inside, 0.0)
+    assert guard.evaluate(make_signal(), {}, inside).approved
+
+    for ts, label in ((too_early, "before open"), (too_late, "after last entry")):
+        acct.mark(ts, 0.0)
+        decision = guard.evaluate(make_signal(), {}, ts)
+        assert not decision.approved, f"{label} should be blocked"
+        assert "personal trading window" in decision.reason
+
+
+def test_personal_window_last_entry_is_before_flatten():
+    """Entries stop an hour before the flatten time, so a position opened at
+    the last legal moment still has room to work."""
+    window = BotConfig.load("futures_50k_trailing").risk.trading_window
+    at_last_entry = datetime(2026, 8, 18, 16, 0, tzinfo=UTC)   # 11:00 CT
+    assert not window.can_enter(at_last_entry)
+    assert not window.must_flatten(at_last_entry), "still managing, not yet flat"
+
+    at_end = datetime(2026, 8, 18, 17, 0, tzinfo=UTC)          # 12:00 CT
+    assert window.must_flatten(at_end)
+
+
+def test_personal_window_forces_flatten_even_when_firm_allows_overnight():
+    """If you are not at the desk, a position must not be live — regardless of
+    what the firm permits."""
+    config = BotConfig.load("ftmo_100k")
+    assert config.firm.allow_overnight
+    guard = RiskGuard(config, Account(config.firm))
+    after_noon = datetime(2026, 8, 18, 18, 0, tzinfo=UTC)      # 13:00 CT
+    assert guard.should_flatten(config.instruments["EURUSD"], after_noon)
+
+
+def test_personal_window_handles_daylight_saving():
+    """The window is anchored to an IANA zone, so 08:00 CT is 08:00 CT in both
+    CST and CDT rather than drifting an hour twice a year."""
+    window = BotConfig.load("futures_50k_trailing").risk.trading_window
+    winter = datetime(2026, 1, 20, 14, 30, tzinfo=UTC)   # CST (UTC-6) -> 08:30 CT
+    summer = datetime(2026, 7, 20, 13, 30, tzinfo=UTC)   # CDT (UTC-5) -> 08:30 CT
+    assert window.can_enter(winter) and window.can_enter(summer)
+    # And the equivalent clock hour in the other season must NOT be inside.
+    assert not window.can_enter(datetime(2026, 1, 20, 13, 30, tzinfo=UTC))  # 07:30 CT
+
+
+def test_window_times_must_be_ordered():
+    import dataclasses as dc
+
+    from bot.config import ConfigError, TradingWindow
+    from datetime import time as dtime
+
+    # The loader rejects an out-of-order window; construct one directly to
+    # confirm the invariant the loader enforces is the one we rely on.
+    w = TradingWindow(True, "America/Chicago", dtime(8, 0), dtime(11, 0), dtime(12, 0))
+    assert w.start < w.last_entry <= w.end

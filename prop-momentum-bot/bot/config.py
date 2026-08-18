@@ -310,6 +310,55 @@ def load_strategies(config_dir: Optional[str] = None) -> tuple[Dict[str, Strateg
 
 
 @dataclass(frozen=True)
+class TradingWindow:
+    """A personal trading window, intersected with each instrument's session.
+
+    Separates "stop opening trades" from "be flat" deliberately: a bot that
+    treats those as the same time either misses the last hour of management or
+    holds a position past the moment you stopped watching.
+    """
+
+    enabled: bool
+    timezone: str
+    start: time
+    last_entry: time
+    end: time
+
+    def _local(self, ts: datetime) -> time:
+        from zoneinfo import ZoneInfo
+
+        return ts.astimezone(ZoneInfo(self.timezone)).time()
+
+    def can_enter(self, ts: datetime) -> bool:
+        if not self.enabled:
+            return True
+        now = self._local(ts)
+        return self.start <= now < self.last_entry
+
+    def must_flatten(self, ts: datetime) -> bool:
+        if not self.enabled:
+            return False
+        return self._local(ts) >= self.end
+
+    def minutes_to_flatten(self, ts: datetime) -> float:
+        if not self.enabled:
+            return float("inf")
+        now = self._local(ts)
+        return (
+            (self.end.hour * 60 + self.end.minute)
+            - (now.hour * 60 + now.minute)
+        )
+
+    def describe(self) -> str:
+        if not self.enabled:
+            return "no personal window (instrument sessions only)"
+        return (
+            f"{self.start:%H:%M}-{self.end:%H:%M} {self.timezone} "
+            f"(last entry {self.last_entry:%H:%M})"
+        )
+
+
+@dataclass(frozen=True)
 class RiskBand:
     up_to_progress: float
     risk_mult: float
@@ -336,6 +385,7 @@ class RiskConfig:
     flatten_before_close_minutes: int
     news_blackout_minutes_before: int
     news_blackout_minutes_after: int
+    trading_window: Optional[TradingWindow] = None
 
     def band_multiplier(self, progress: float) -> float:
         """Risk multiplier for how far through the profit target we are."""
@@ -358,6 +408,22 @@ def load_risk(config_dir: Optional[str] = None) -> RiskConfig:
     s = _require(raw, "sizing", "risk.yaml")
     a = raw.get("adaptive", {})
     g = raw.get("guards", {})
+    w = raw.get("trading_window", {})
+    window = None
+    if w:
+        ctx = "risk.yaml[trading_window]"
+        window = TradingWindow(
+            enabled=bool(w.get("enabled", True)),
+            timezone=w.get("timezone", "UTC"),
+            start=_parse_hhmm(w.get("start", "00:00"), ctx),
+            last_entry=_parse_hhmm(w.get("last_entry", w.get("end", "23:59")), ctx),
+            end=_parse_hhmm(w.get("end", "23:59"), ctx),
+        )
+        if not (window.start < window.last_entry <= window.end):
+            raise ConfigError(
+                f"{ctx}: times must satisfy start < last_entry <= end, got "
+                f"{window.start}, {window.last_entry}, {window.end}"
+            )
     bands = [
         RiskBand(float(b["up_to_progress"]), float(b["risk_mult"]))
         for b in a.get("bands", [])
@@ -383,6 +449,7 @@ def load_risk(config_dir: Optional[str] = None) -> RiskConfig:
         flatten_before_close_minutes=int(g.get("flatten_before_close_minutes", 10)),
         news_blackout_minutes_before=int(g.get("news_blackout_minutes_before", 2)),
         news_blackout_minutes_after=int(g.get("news_blackout_minutes_after", 3)),
+        trading_window=window,
     )
 
 
