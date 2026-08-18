@@ -1,0 +1,5 @@
+# Core engine. Everything below is enough to run backtests, the paper loop,
+# and the full test suite.
+numpy>=1.24
+PyYAML>=6.0
+pytest>=7.4

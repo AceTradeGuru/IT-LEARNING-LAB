@@ -1,0 +1,5 @@
+# Only needed if you enable a live broker adapter (see bot/brokers/live_stubs.py).
+# The engine does not import these unless an adapter is explicitly turned on.
+-r requirements.txt
+ccxt>=4.2          # crypto exchanges
+requests>=2.31     # OANDA (forex) and Tradovate (futures) REST
