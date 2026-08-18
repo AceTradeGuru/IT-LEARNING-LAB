@@ -1,0 +1,73 @@
+# Prop firm rule profiles.
+#
+# drawdown_model decides how the "you're out" line moves:
+#   static           -> fixed floor from the starting balance (never moves).  FTMO-style.
+#   eod_trailing     -> floor trails the highest END-OF-DAY balance.          Topstep-style.
+#   intraday_trailing-> floor trails the highest INTRADAY equity, tick by
+#                       tick, including unrealized profit.                    Apex-style.
+#
+# Every number here is checked against the firm's rulebook at runtime, so if
+# your firm's numbers differ, edit them here rather than touching the code.
+
+profiles:
+
+  ftmo_100k:
+    display_name: "FTMO-style 100k Challenge (Forex/CFD)"
+    asset_classes: [forex, crypto]
+    starting_balance: 100000.0
+    currency: USD
+    drawdown_model: static
+    max_total_drawdown_pct: 10.0     # measured from starting_balance
+    max_daily_loss_pct: 5.0          # measured from balance at day open
+    profit_target_pct: 10.0
+    min_trading_days: 4
+    max_trading_days: 0              # 0 = unlimited
+    daily_reset_tz: "UTC"
+    daily_reset_hour: 0
+    consistency_max_day_pct: 0.0     # 0 = rule not enforced
+    allow_overnight: true
+    allow_weekend: false
+    # Daily loss on a static-DD firm is usually measured on balance+equity,
+    # whichever is worse. Set false if your firm only counts closed trades.
+    daily_loss_includes_unrealized: true
+
+  futures_50k_trailing:
+    display_name: "Topstep-style 50k Combine (Futures, EOD trailing)"
+    asset_classes: [futures]
+    starting_balance: 50000.0
+    currency: USD
+    drawdown_model: eod_trailing
+    max_total_drawdown_pct: 4.0      # $2,000 on a 50k account
+    max_daily_loss_pct: 2.0          # $1,000
+    profit_target_pct: 6.0           # $3,000
+    min_trading_days: 5
+    max_trading_days: 0
+    daily_reset_tz: "America/New_York"
+    daily_reset_hour: 17             # CME session boundary: 5pm ET
+    consistency_max_day_pct: 50.0    # no single day may be >50% of total profit
+    allow_overnight: false           # flat by session close
+    allow_weekend: false
+    daily_loss_includes_unrealized: true
+    # The trailing floor stops moving once it reaches this level (many futures
+    # firms freeze the trail at starting_balance + profit_target, or at
+    # breakeven). Set to null to trail forever.
+    trail_freeze_at_balance: 52000.0
+
+  futures_50k_intraday_trail:
+    display_name: "Apex-style 50k Eval (Futures, intraday trailing)"
+    asset_classes: [futures]
+    starting_balance: 50000.0
+    currency: USD
+    drawdown_model: intraday_trailing
+    max_total_drawdown_pct: 5.0      # $2,500
+    max_daily_loss_pct: 0.0          # 0 = no separate daily limit
+    profit_target_pct: 6.0
+    min_trading_days: 7
+    max_trading_days: 0
+    daily_reset_tz: "America/New_York"
+    daily_reset_hour: 17
+    consistency_max_day_pct: 30.0
+    allow_overnight: false
+    allow_weekend: false
+    daily_loss_includes_unrealized: true
+    trail_freeze_at_balance: null

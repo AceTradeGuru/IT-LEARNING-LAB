@@ -1,0 +1,128 @@
+# Contract specs. These drive position sizing and cost modelling, so wrong
+# numbers here mean a backtest that lies to you. Verify against your broker.
+#
+#   tick_size      : smallest price increment
+#   value_per_point: account-currency PnL for 1.0 of price movement, per 1 unit
+#                    (futures: contract multiplier. forex: 100k notional per lot.
+#                     crypto: 1.0, i.e. size is denominated in the coin.)
+#   min_size/size_step: order granularity (futures = whole contracts)
+#   spread_points  : typical quoted spread, in price units
+#   commission_per_unit_roundturn: fees for opening+closing 1 unit
+#   session        : tradeable window in the session_tz (24h markets use 00:00-23:59)
+#   typical_atr_points: normal DAILY range in price units. Calibrates the
+#                    synthetic generator and sanity-checks stop sizes. These
+#                    are round-number estimates for typical conditions — verify
+#                    against your own data before relying on them.
+
+instruments:
+
+  # ---------------- Futures ----------------
+  MES:
+    display_name: "Micro E-mini S&P 500"
+    asset_class: futures
+    tick_size: 0.25
+    value_per_point: 5.0
+    min_size: 1
+    size_step: 1
+    spread_points: 0.25
+    commission_per_unit_roundturn: 1.24
+    session_tz: "America/New_York"
+    session: ["09:30", "16:00"]
+    typical_atr_points: 60.0
+
+  MNQ:
+    display_name: "Micro E-mini Nasdaq 100"
+    asset_class: futures
+    tick_size: 0.25
+    value_per_point: 2.0
+    min_size: 1
+    size_step: 1
+    spread_points: 0.25
+    commission_per_unit_roundturn: 1.24
+    session_tz: "America/New_York"
+    session: ["09:30", "16:00"]
+    typical_atr_points: 300.0
+
+  MGC:
+    display_name: "Micro Gold"
+    asset_class: futures
+    tick_size: 0.1
+    value_per_point: 10.0
+    min_size: 1
+    size_step: 1
+    spread_points: 0.2
+    commission_per_unit_roundturn: 1.34
+    session_tz: "America/New_York"
+    session: ["08:20", "13:30"]
+    typical_atr_points: 26.0
+
+  # ---------------- Forex ----------------
+  # size is in LOTS. value_per_point 100000 => 1 lot, 1.0 price move = $100,000.
+  # A 1-pip (0.0001) move on 1 lot is therefore $10. Correct for USD-quoted pairs.
+  EURUSD:
+    display_name: "Euro / US Dollar"
+    asset_class: forex
+    tick_size: 0.00001
+    value_per_point: 100000.0
+    min_size: 0.01
+    size_step: 0.01
+    spread_points: 0.00008
+    commission_per_unit_roundturn: 7.0     # per lot round turn
+    session_tz: "UTC"
+    session: ["07:00", "20:00"]            # London open -> NY afternoon
+    typical_atr_points: 0.0070
+
+  GBPUSD:
+    display_name: "British Pound / US Dollar"
+    asset_class: forex
+    tick_size: 0.00001
+    value_per_point: 100000.0
+    min_size: 0.01
+    size_step: 0.01
+    spread_points: 0.00012
+    commission_per_unit_roundturn: 7.0
+    session_tz: "UTC"
+    session: ["07:00", "20:00"]
+    typical_atr_points: 0.0090
+
+  USDJPY:
+    display_name: "US Dollar / Japanese Yen"
+    asset_class: forex
+    tick_size: 0.001
+    value_per_point: 1000.0                # approx USD value per 1.0 JPY move / lot
+    min_size: 0.01
+    size_step: 0.01
+    spread_points: 0.010
+    commission_per_unit_roundturn: 7.0
+    session_tz: "UTC"
+    session: ["00:00", "20:00"]
+    typical_atr_points: 0.95
+
+  # ---------------- Crypto ----------------
+  BTCUSDT:
+    display_name: "Bitcoin / USDT perpetual"
+    asset_class: crypto
+    tick_size: 0.1
+    value_per_point: 1.0
+    min_size: 0.001
+    size_step: 0.001
+    spread_points: 2.0
+    commission_per_unit_roundturn: 0.0     # taker fees applied as bps below
+    taker_fee_bps: 5.0
+    session_tz: "UTC"
+    session: ["00:00", "23:59"]
+    typical_atr_points: 1800.0
+
+  ETHUSDT:
+    display_name: "Ethereum / USDT perpetual"
+    asset_class: crypto
+    tick_size: 0.01
+    value_per_point: 1.0
+    min_size: 0.01
+    size_step: 0.01
+    spread_points: 0.3
+    commission_per_unit_roundturn: 0.0
+    taker_fee_bps: 5.0
+    session_tz: "UTC"
+    session: ["00:00", "23:59"]
+    typical_atr_points: 110.0

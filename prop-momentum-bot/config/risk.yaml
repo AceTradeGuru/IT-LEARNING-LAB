@@ -1,0 +1,61 @@
+# Risk sizing. This is the part that decides whether the eval survives.
+#
+# The core idea: risk per trade is NOT a fixed % of equity. It is the SMALLER of
+# a fixed % and a fraction of the distance to the drawdown floor. As the account
+# approaches the bust line the size collapses toward zero automatically, so a
+# losing streak asymptotes into the floor instead of punching through it.
+
+sizing:
+  base_risk_pct: 0.5              # % of current equity risked per trade at full size
+  max_risk_pct: 1.0               # hard ceiling regardless of other multipliers
+  # Never risk more than this fraction of the remaining drawdown buffer on one
+  # trade. 0.10 => it takes 10 consecutive max-losers to reach the floor, and
+  # because the buffer shrinks each time, actually many more.
+  max_buffer_fraction_per_trade: 0.10
+  # Same idea against the daily loss limit.
+  max_daily_buffer_fraction_per_trade: 0.25
+  min_stop_distance_atr: 0.5      # reject signals with an unrealistically tight stop
+  # Refuse trades whose round-turn cost eats more than this fraction of the
+  # money being risked. A stop so tight that commission + spread is 30% of the
+  # risk needs a wildly high win rate just to break even — the trade is bad
+  # before the market does anything. This is what stops a 1-ATR scalp stop
+  # being used on an instrument whose costs cannot support it.
+  max_cost_fraction_of_risk: 0.15
+  round_down_to_step: true        # never round size UP past the risk budget
+
+# Scale total exposure by how the eval is going. Pushing size while up is how
+# most funded accounts die; this does the opposite.
+adaptive:
+  enabled: true
+  # progress = realized profit / profit target
+  # Each band multiplies base_risk_pct.
+  bands:
+    - {up_to_progress: 0.25, risk_mult: 1.00}
+    - {up_to_progress: 0.50, risk_mult: 1.00}
+    - {up_to_progress: 0.75, risk_mult: 0.80}
+    - {up_to_progress: 0.90, risk_mult: 0.60}
+    - {up_to_progress: 1.00, risk_mult: 0.40}   # protect the finish line
+  # Cut size after losses, restore slowly after wins.
+  loss_streak_mult: [1.0, 0.75, 0.5]            # index = consecutive losses
+  # If today is already down this fraction of the daily limit, halve size.
+  defensive_daily_loss_fraction: 0.5
+  defensive_risk_mult: 0.5
+
+guards:
+  # Stop trading for the day once this fraction of the daily loss limit is used.
+  # Stopping at 60% leaves room for an open trade to go against you before it
+  # is closed, which a 100% cutoff does not.
+  daily_loss_stop_fraction: 0.60
+  # Same for the total drawdown buffer, measured across the whole eval.
+  total_drawdown_stop_fraction: 0.80
+  # Lock in the pass: once profit target is reached, stop opening new trades.
+  stop_on_target_reached: true
+  # Refuse to open a trade whose worst case would breach the floor. Always on
+  # in spirit; this flag exists so tests can disable it.
+  reject_if_worst_case_breaches: true
+  # Flatten everything this many minutes before session close (futures firms
+  # forbid overnight holds; being flat early avoids close-auction slippage).
+  flatten_before_close_minutes: 10
+  # Skip trading around high-impact news if a calendar is supplied.
+  news_blackout_minutes_before: 2
+  news_blackout_minutes_after: 3
