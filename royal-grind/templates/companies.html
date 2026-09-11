@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Companies{% endblock %}
+{% block crumb %}Companies{% endblock %}
+{% block content %}
+
+<h1>{{ rows|length }} companies</h1>
+<p class="sub">The database behind the list. Freight profile, not just a name and a
+  headcount — modes, volume, lanes and who they use today.</p>
+
+<div class="card">
+  <form method="get" class="row">
+    <input name="q" value="{{ q }}" placeholder="Name or industry" style="max-width:320px">
+    <select name="state" style="width:auto">
+      <option value="">Every state</option>
+      {% for s in states %}
+        <option value="{{ s.state }}" {{ 'selected' if s.state == state }}>{{ s.state }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-primary btn-sm">Filter</button>
+    {% if q or state %}<a class="btn btn-ghost btn-sm" href="{{ url_for('companies') }}">Clear</a>{% endif %}
+  </form>
+</div>
+
+<div class="card pad0"><div class="tablewrap"><table>
+  <thead><tr><th class="num">Score</th><th>Company</th><th>Industry</th><th>Where</th>
+    <th class="num">Revenue</th><th class="num">Loads/mo</th><th>Modes</th>
+    <th class="num">Signals</th><th>Data</th></tr></thead>
+  <tbody>
+  {% for c in rows %}
+    <tr>
+      <td class="num">{% if c.best_score %}<span class="score {{ 'hot' if c.best_score >= 80 else 'warm' if c.best_score >= 60 else 'cool' if c.best_score >= 40 else 'cold' }}">{{ c.best_score }}</span>{% else %}<span class="faint">—</span>{% endif %}</td>
+      <td><b class="small"><a href="{{ url_for('company_detail', company_id=c.id) }}">{{ c.name }}</a></b>
+        <div class="tiny faint">{{ c.contacts }} contact{{ 's' if c.contacts != 1 }}</div></td>
+      <td class="tiny muted">{{ c.industry }}</td>
+      <td class="tiny nowrap">{{ c.city }}, {{ c.state }}</td>
+      <td class="num">{{ c.revenue_est|money if c.revenue_est else '—' }}</td>
+      <td class="num">{{ c.loads_per_month or '—' }}</td>
+      <td class="tiny">{{ c.modes.upper().replace(',', ' ') if c.modes else '—' }}</td>
+      <td class="num">{% if c.signals %}<span class="badge good">{{ c.signals }}</span>{% else %}<span class="faint">0</span>{% endif %}</td>
+      <td><span class="badge {{ 'good' if c.confidence >= 75 else 'warm' if c.confidence >= 50 else 'bad' }}">{{ c.confidence }}</span>
+        <div class="tiny faint">{{ c.source.replace('_',' ') }}</div></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="9" class="empty">No companies match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div></div>
+{% endblock %}

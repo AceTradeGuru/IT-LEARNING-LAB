@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Compliance{% endblock %}
+{% block crumb %}Settings / Compliance{% endblock %}
+{% block content %}
+
+<h1>Compliance</h1>
+<p class="sub">
+  What this platform can produce when somebody asks. None of it is legal advice and
+  installing it does not make anyone compliant — telemarketing and privacy law turn on
+  facts this software does not know. What it provides is the mechanism to enforce a
+  policy your counsel sets, and the record of what the system did.
+</p>
+
+<div class="grid g4" style="margin-bottom:1.2rem">
+  <div class="kpi"><div class="lbl">Recording policy</div>
+    <div class="num sm">{{ org.recording_policy.replace('_',' ') }}</div>
+    <div class="note">{{ recorded }} call{{ 's' if recorded != 1 }} recorded to date</div></div>
+  <div class="kpi"><div class="lbl">Calling window</div>
+    <div class="num sm">{{ '%02d'|format(org.quiet_start) }}–{{ '%02d'|format(org.quiet_end) }}</div>
+    <div class="note">In the prospect's local time</div></div>
+  <div class="kpi"><div class="lbl">Retention</div>
+    <div class="num sm">{{ org.retention_days }}d</div>
+    <div class="note">{{ candidates|length }} contact{{ 's' if candidates|length != 1 }} now past it</div></div>
+  <div class="kpi"><div class="lbl">Known departed</div>
+    <div class="num sm">{{ departed|length }}</div>
+    <div class="note">Records naming somebody who has left</div></div>
+</div>
+
+<div class="grid split">
+  <div>
+    <div class="card">
+      <h2 style="margin-top:0">Retention — {{ candidates|length }} past the window</h2>
+      <p class="muted">No activity for {{ org.retention_days }} days. Erasure destroys the
+        person — name, title, every number, every transcript — and keeps the commercial
+        record of what happened, redacted, so the learning loop does not silently lose its
+        history.</p>
+      {% if has_role('owner') %}
+        <form method="post" action="{{ url_for('compliance_purge') }}"
+              onsubmit="return confirm('Erase {{ candidates|length }} contacts? This cannot be undone.')">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-red" {{ 'disabled' if not candidates }}>Erase all {{ candidates|length }}</button>
+        </form>
+      {% else %}
+        <p class="tiny faint">Only an owner can run the purge.</p>
+      {% endif %}
+      <p class="tiny faint" style="margin-top:.6rem">
+        Unattended, from cron: <span class="mono">python3 compliance.py --purge --apply</span>.
+        Without <span class="mono">--apply</span> it is a dry run.
+      </p>
+
+      <div class="tablewrap" style="margin-top:.9rem;max-height:22rem;overflow-y:auto">
+        <table>
+          <thead><tr><th>Contact</th><th>Company</th><th class="num">Last activity</th><th></th></tr></thead>
+          <tbody>
+          {% for c in candidates[:60] %}
+            <tr>
+              <td class="small">{{ c.name }}</td>
+              <td class="tiny muted">{{ c.company_name }}</td>
+              <td class="num tiny muted">{{ (c.last_call or c.last_touch or c.created_at)|since }}</td>
+              <td class="num"><a class="tiny" href="{{ url_for('contact_export', contact_id=c.id) }}">export</a></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="empty tiny">Nothing is past the retention window.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Records naming somebody who has left</h2>
+      <p class="muted">Not a legal problem — a data one, and the fastest way to burn a
+        rep's morning. Whoever answers is somebody else.</p>
+      <div class="tablewrap" style="margin-top:.7rem;max-height:20rem;overflow-y:auto">
+        <table>
+          <thead><tr><th>Contact</th><th>Title on file</th><th>Company</th></tr></thead>
+          <tbody>
+          {% for c in departed %}
+            <tr><td class="small">{{ c.name }}</td>
+              <td class="tiny muted">{{ c.title }}</td>
+              <td class="tiny"><a href="{{ url_for('company_detail', company_id=c.company_id) }}">{{ c.company_name }}</a></td></tr>
+          {% else %}
+            <tr><td colspan="3" class="empty tiny">None flagged.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Subject access and erasure</h3>
+      <p class="tiny muted">
+        Every contact page carries an <b>Export</b> (GDPR Art. 15 / CCPA §1798.110) and,
+        for owners, an <b>Erase</b> (Art. 17). The export includes the AI-generated
+        material — the research brief written about them, the call plan built to persuade
+        them, the analysis of what they said. Somebody asking what a system holds about
+        them is entitled to the parts that were inferred, not just the parts that were
+        typed in. Those are usually the parts they did not know existed.
+      </p>
+      <p class="tiny faint" style="margin-top:.5rem">
+        Erasure suppresses their numbers before deleting them, so the next enrichment run
+        cannot re-import the person who just asked to be forgotten.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>All-party consent states</h3>
+      <p class="tiny muted" style="margin-bottom:.5rem">
+        Where every party must consent to a recording. The platform takes the stricter
+        reading of the two jurisdictions on the call, and treats an unknown prospect
+        location as strict.
+      </p>
+      <div class="row tight">
+        {% for code, name in all_party.items() %}
+          <span class="badge neutral" title="{{ name }}">{{ code }}</span>
+        {% endfor %}
+      </div>
+      <p class="tiny faint" style="margin-top:.6rem">
+        Compiled from the commonly cited list and kept as one constant in
+        <span class="mono">compliance.py</span> so counsel can review it in one place.
+        Oregon's rule differs between in-person and telephonic conversations; the
+        platform takes the stricter reading rather than deciding a nuance of Oregon law
+        inside a scoring function.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>What is recorded about every AI output</h3>
+      <p class="tiny muted">
+        Every generated brief, plan, email and call analysis is written to the
+        <a href="{{ url_for('settings_audit') }}">activity log</a> with the engine that
+        produced it, who triggered it, and when. When a model writes the words a
+        salesperson says to a customer, somebody eventually asks where a particular claim
+        came from.
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}

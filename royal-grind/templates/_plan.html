@@ -1,0 +1,46 @@
+{# The call plan, rendered. Shared by the prospect page and the call console so
+   the rep reads exactly the same words in preparation and on the line. #}
+<div class="eyebrow">Open with this</div>
+<div class="speak" style="margin:.3rem 0 1rem">{{ plan.opening }}</div>
+
+<h3>Discovery — in this order</h3>
+{% for q in plan.discovery %}
+  <div class="script">
+    <div class="q">{{ loop.index }}. {{ q.question }}</div>
+    <div class="a">Listening for: {{ q.listening_for }}</div>
+  </div>
+{% endfor %}
+
+<h3 style="margin-top:1.2rem">What to say, and when</h3>
+{% for v in plan.value_points %}
+  <div class="script">
+    <div class="q">{{ v.point }}</div>
+    <div class="a">Use it: {{ v.when_to_use }}</div>
+  </div>
+{% endfor %}
+
+<h3 style="margin-top:1.2rem">When they push back</h3>
+{% for o in plan.objections %}
+  <div class="script">
+    <div class="q">“{{ o.objection }}”</div>
+    <div class="a">{{ o.response }}</div>
+  </div>
+{% endfor %}
+
+<div class="grid g2" style="margin-top:1.2rem">
+  <div class="notebox">
+    <div class="eyebrow">If it goes to voicemail</div>
+    <p style="margin-top:.3rem;color:var(--text)">{{ plan.voicemail }}</p>
+  </div>
+  <div class="notebox">
+    <div class="eyebrow">Ask for this</div>
+    <p style="margin-top:.3rem;color:var(--text)">{{ plan.next_step_ask }}</p>
+  </div>
+</div>
+
+<div class="warnbox" style="margin-top:1rem">
+  <b>Do not say</b>
+  <ul style="margin:.3rem 0 0 1.1rem">
+    {% for d in plan.do_not_say %}<li>{{ d }}</li>{% endfor %}
+  </ul>
+</div>

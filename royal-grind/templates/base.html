@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Royal Grind — {% block title %}{% endblock %}</title>
+<style>
+  /* ------------------------------------------------------------------- *
+   * A sales floor tool, not a BI dashboard. Three rules follow:          *
+   *   1. The score and the reason for it are always adjacent. A number   *
+   *      with no explanation next to it is a number reps learn to        *
+   *      ignore.                                                         *
+   *   2. Data provenance is rendered, never implied. A guessed number    *
+   *      and a verified one must not look the same at a glance.          *
+   *   3. One accent color, so red and amber keep meaning something.      *
+   * ------------------------------------------------------------------- */
+  :root {
+    --ink:#101624; --ink2:#1a2336; --ink3:#27324a;
+    --brand:#b4813a; --brand-dk:#8a6122; --brand-lt:#fdf6ea;
+    --bg:#f6f6f4; --card:#fff; --line:#e5e4e0; --line2:#f0efec;
+    --text:#1c2029; --muted:#6a7081; --faint:#979db0;
+    --hot:#b91c1c; --warm:#c2740c; --cool:#0369a1; --cold:#64748b;
+    --good:#15803d; --bad:#b91c1c;
+    --hot-bg:#fef2f2; --warm-bg:#fffaeb; --cool-bg:#f0f9ff; --cold-bg:#f4f5f7;
+    --good-bg:#f0fdf4; --bad-bg:#fef2f2;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.05);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  a { color:var(--brand-dk); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+
+  /* ------------------------------------------------------------ shell -- */
+  .shell { display:flex; min-height:100vh; }
+  aside {
+    width:228px; flex:0 0 228px; background:var(--ink); color:#fff;
+    display:flex; flex-direction:column; position:sticky; top:0; height:100vh;
+  }
+  .brand { padding:1.15rem 1.25rem .9rem; font-size:1.18rem; font-weight:800;
+           letter-spacing:-.4px; }
+  .brand span { color:#e0b872; }
+  .brand small { display:block; font-size:.62rem; font-weight:700; color:#7d8798;
+                 letter-spacing:.11em; text-transform:uppercase; margin-top:.25rem;
+                 white-space:nowrap; }
+  .navgroup { padding:.7rem 1.25rem .25rem; font-size:.64rem; letter-spacing:.11em;
+              text-transform:uppercase; color:#5f6a80; font-weight:700; }
+  aside nav a {
+    display:block; padding:.46rem 1.25rem; color:#c2c8d6; font-weight:600;
+    font-size:.875rem; border-left:3px solid transparent;
+  }
+  aside nav a:hover { background:var(--ink2); color:#fff; text-decoration:none; }
+  aside nav a.on { background:var(--ink2); color:#fff; border-left-color:#e0b872; }
+  .enginebox { margin-top:auto; padding:.85rem 1.25rem; border-top:1px solid var(--ink3);
+               font-size:.7rem; color:#8b94a8; line-height:1.45; }
+  .enginebox + .enginebox { border-top:1px solid var(--ink3); }
+  .enginebox .dot { display:inline-block; width:7px; height:7px; border-radius:50%;
+                    margin-right:.4rem; }
+  .enginebox .dot.live { background:#4ade80; }
+  .enginebox .dot.off { background:#64748b; }
+  .enginebox b { color:#dee2ea; display:block; font-size:.76rem; margin-bottom:.15rem; }
+
+  .body { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .topbar {
+    display:flex; align-items:center; gap:1rem; padding:.7rem 1.75rem;
+    background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap;
+  }
+  .topbar .crumb { font-weight:700; font-size:.95rem; }
+  .topbar .spacer { flex:1; }
+  .viewer { display:flex; align-items:center; gap:.55rem; font-size:.78rem;
+            color:var(--muted); white-space:nowrap; }
+  main { padding:1.5rem 1.75rem 3.5rem; max-width:1340px; width:100%; }
+
+  @media (max-width:900px) {
+    .shell { flex-direction:column; }
+    aside { width:100%; flex:none; height:auto; position:static; }
+    aside nav { display:flex; flex-wrap:wrap; padding:0 .75rem .6rem; }
+    aside nav a { border-left:none; border-bottom:3px solid transparent; padding:.4rem .65rem; }
+    aside nav a.on { border-left:none; border-bottom-color:#e0b872; }
+    .navgroup { display:none; }
+    .enginebox { margin-top:0; }
+    main { padding:1.25rem 1rem 2.5rem; }
+  }
+
+  /* -------------------------------------------------------- typography -- */
+  h1 { font-size:1.45rem; letter-spacing:-.5px; margin-bottom:.2rem; }
+  h2 { font-size:1.02rem; margin:1.6rem 0 .7rem; letter-spacing:-.2px; }
+  h3 { font-size:.9rem; margin-bottom:.4rem; }
+  .sub { color:var(--muted); margin-bottom:1.3rem; max-width:76ch; }
+  .muted { color:var(--muted); } .faint { color:var(--faint); }
+  .tiny { font-size:.78rem; } .small { font-size:.85rem; }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:.88em; }
+  .eyebrow { font-size:.66rem; letter-spacing:.1em; text-transform:uppercase;
+             color:var(--faint); font-weight:700; }
+  .nowrap { white-space:nowrap; }
+
+  /* ------------------------------------------------------------- cards -- */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:11px;
+          padding:1.1rem 1.2rem; margin-bottom:1rem; box-shadow:var(--shadow); }
+  .card.pad0 { padding:0; overflow:hidden; }
+  .card h2:first-child, .card h3:first-child { margin-top:0; }
+  .cardhead { padding:.85rem 1.2rem; border-bottom:1px solid var(--line2);
+              display:flex; align-items:center; gap:.7rem; flex-wrap:wrap; }
+  .cardhead h2, .cardhead h3 { margin:0; }
+  .cardhead .spacer { flex:1; }
+  .grid { display:grid; gap:1rem; }
+  .g2 { grid-template-columns:1fr 1fr; }
+  .g3 { grid-template-columns:repeat(3,1fr); }
+  .g4 { grid-template-columns:repeat(4,1fr); }
+  .g5 { grid-template-columns:repeat(5,1fr); }
+  .split { grid-template-columns:1.9fr 1fr; align-items:start; }
+  .split-wide { grid-template-columns:1fr 1.1fr; align-items:start; }
+  @media (max-width:1050px){ .g4,.g5{grid-template-columns:repeat(2,1fr);}
+                             .split,.split-wide{grid-template-columns:1fr;} }
+  @media (max-width:680px){ .g2,.g3,.g4,.g5{grid-template-columns:1fr;} }
+
+  /* ------------------------------------------------------------- stats -- */
+  .kpi { background:#fff; border:1px solid var(--line); border-radius:11px;
+         padding:.9rem 1.05rem; box-shadow:var(--shadow); }
+  .kpi .lbl { font-size:.68rem; letter-spacing:.08em; text-transform:uppercase;
+              color:var(--faint); font-weight:700; }
+  .kpi .num { font-size:1.6rem; font-weight:800; letter-spacing:-.9px; margin:.2rem 0 .1rem;
+              font-variant-numeric:tabular-nums; }
+  .kpi .num.sm { font-size:1.22rem; }
+  .kpi .note { font-size:.76rem; color:var(--muted); line-height:1.4; }
+
+  .track { background:var(--line2); border-radius:99px; height:7px; overflow:hidden;
+           margin-top:.5rem; }
+  .track i { display:block; height:100%; border-radius:99px; background:var(--brand); }
+  .track i.hot{background:var(--hot)} .track i.warm{background:var(--warm)}
+  .track i.cool{background:var(--cool)} .track i.cold{background:var(--cold)}
+  .track i.good{background:var(--good)} .track i.bad{background:var(--bad)}
+
+  /* ------------------------------------------------------------ tables -- */
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-size:.66rem; letter-spacing:.08em; text-transform:uppercase;
+       color:var(--faint); font-weight:700; padding:.55rem .8rem; background:#fafaf8;
+       border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:.6rem .8rem; border-bottom:1px solid var(--line2); vertical-align:middle; }
+  tbody tr:last-child td { border-bottom:none; }
+  tbody tr:hover { background:#fafaf9; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .tablewrap { overflow-x:auto; }
+
+  /* ------------------------------------------------------------ badges -- */
+  .badge { display:inline-block; padding:.14rem .48rem; border-radius:6px;
+           font-size:.69rem; font-weight:700; letter-spacing:.02em; white-space:nowrap; }
+  .badge.hot  { background:var(--hot-bg);  color:var(--hot); }
+  .badge.warm { background:var(--warm-bg); color:var(--warm); }
+  .badge.cool { background:var(--cool-bg); color:var(--cool); }
+  .badge.cold { background:var(--cold-bg); color:var(--cold); }
+  .badge.good { background:var(--good-bg); color:var(--good); }
+  .badge.bad  { background:var(--bad-bg);  color:var(--bad); }
+  .badge.neutral { background:#f1f1ef; color:var(--muted); }
+  .badge.brand   { background:var(--brand-lt); color:var(--brand-dk); }
+
+  /* Data provenance. Rule 2 of the design brief lives in these five rules —
+     a verified number and a guess must never render the same. */
+  .prov { display:inline-flex; align-items:center; gap:.3rem; font-size:.69rem;
+          font-weight:700; padding:.12rem .42rem; border-radius:5px; }
+  .prov::before { content:''; width:6px; height:6px; border-radius:50%; }
+  .prov.verified  { background:var(--good-bg); color:var(--good); }
+  .prov.verified::before { background:var(--good); }
+  .prov.probable  { background:var(--cool-bg); color:var(--cool); }
+  .prov.probable::before { background:var(--cool); }
+  .prov.guessed   { background:var(--warm-bg); color:var(--warm); }
+  .prov.guessed::before { background:var(--warm); }
+  .prov.catch_all { background:var(--warm-bg); color:var(--warm); }
+  .prov.catch_all::before { background:var(--warm); }
+  .prov.invalid   { background:var(--bad-bg); color:var(--bad);
+                    text-decoration:line-through; }
+  .prov.invalid::before { background:var(--bad); text-decoration:none; }
+
+  .score { font-weight:800; font-variant-numeric:tabular-nums; font-size:1.05rem; }
+  .score.hot{color:var(--hot)} .score.warm{color:var(--warm)}
+  .score.cool{color:var(--cool)} .score.cold{color:var(--cold)}
+  .scorebox { display:flex; flex-direction:column; align-items:center; justify-content:center;
+              width:52px; height:52px; border-radius:10px; flex:0 0 52px;
+              font-variant-numeric:tabular-nums; }
+  .scorebox b { font-size:1.25rem; font-weight:800; line-height:1; }
+  .scorebox span { font-size:.55rem; text-transform:uppercase; letter-spacing:.07em;
+                   font-weight:700; margin-top:.15rem; }
+  .scorebox.hot{background:var(--hot-bg);color:var(--hot)}
+  .scorebox.warm{background:var(--warm-bg);color:var(--warm)}
+  .scorebox.cool{background:var(--cool-bg);color:var(--cool)}
+  .scorebox.cold{background:var(--cold-bg);color:var(--cold)}
+
+  .avatar { width:30px; height:30px; border-radius:50%; background:var(--brand-lt);
+            color:var(--brand-dk); font-weight:800; font-size:.72rem;
+            display:inline-flex; align-items:center; justify-content:center; flex:0 0 30px; }
+  .person { display:flex; align-items:center; gap:.55rem; }
+  .person .nm { font-weight:700; }
+  .person .sub2 { font-size:.74rem; color:var(--muted); }
+
+  /* ----------------------------------------------------------- signals -- */
+  .sig { border:1px solid var(--line); border-left:4px solid var(--line);
+         border-radius:9px; padding:.6rem .85rem; margin-bottom:.5rem;
+         display:flex; gap:.85rem; align-items:flex-start; background:#fff; }
+  .sig.good     { border-left-color:var(--good); background:var(--good-bg); }
+  .sig.critical { border-left-color:var(--bad); background:var(--bad-bg); }
+  .sig.high     { border-left-color:#ea580c; }
+  .sig.medium   { border-left-color:var(--warm); }
+  .sig.low      { border-left-color:#94a3b8; }
+  .sig .pts { font-weight:800; min-width:2.9rem; text-align:right;
+              font-variant-numeric:tabular-nums; font-size:.9rem; }
+  .sig.good .pts { color:var(--good); }
+  .sig.critical .pts, .sig.high .pts { color:var(--bad); }
+  .sig.medium .pts { color:var(--warm); }
+  .sig.low .pts { color:var(--muted); }
+  .sig .lbl { font-weight:700; }
+  .sig .det { color:var(--muted); font-size:.83rem; margin-top:.1rem; max-width:80ch; }
+
+  /* The blocking banner. It is deliberately loud — it is a legal instruction. */
+  .block { border:1px solid #fca5a5; background:#fef2f2; border-radius:10px;
+           padding:.85rem 1rem; margin-bottom:1rem; }
+  .block h3 { color:var(--bad); margin-bottom:.35rem; }
+  .block ul { margin:.3rem 0 0 1.1rem; color:#7f1d1d; }
+  .warnbox { border:1px solid #fcd34d; background:#fffbeb; border-radius:10px;
+             padding:.7rem .95rem; margin-bottom:1rem; font-size:.86rem; color:#78350f; }
+  .okbox { border:1px solid #a7f3d0; background:#f0fdf4; border-radius:10px;
+           padding:.7rem .95rem; margin-bottom:1rem; font-size:.86rem; color:#14532d; }
+  .notebox { border:1px solid var(--line); background:#fafaf8; border-radius:10px;
+             padding:.7rem .95rem; font-size:.85rem; color:var(--muted); }
+
+  /* ------------------------------------------------------------- forms -- */
+  label { display:block; font-size:.7rem; font-weight:700; color:var(--muted);
+          letter-spacing:.05em; text-transform:uppercase; margin:.8rem 0 .25rem; }
+  label.plain { text-transform:none; letter-spacing:0; font-size:.85rem;
+                color:var(--text); display:inline-flex; align-items:center; gap:.4rem;
+                margin:.2rem 0; }
+  input, select, textarea {
+    width:100%; padding:.52rem .7rem; border:1px solid var(--line); border-radius:8px;
+    font-size:.9rem; font-family:inherit; background:#fff; color:var(--text);
+  }
+  input[type=checkbox], input[type=radio] { width:auto; }
+  input:focus, select:focus, textarea:focus {
+    outline:none; border-color:var(--brand); box-shadow:0 0 0 3px rgba(180,129,58,.14);
+  }
+  textarea { min-height:92px; resize:vertical; line-height:1.55; }
+  .btn { display:inline-block; border:none; cursor:pointer; border-radius:8px;
+         padding:.52rem 1rem; font-weight:700; font-size:.86rem; font-family:inherit; }
+  .btn:hover { text-decoration:none; opacity:.93; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .btn-primary { background:var(--brand); color:#fff; }
+  .btn-dark { background:var(--ink); color:#fff; }
+  .btn-ghost { background:#fff; color:var(--text); border:1px solid var(--line); }
+  .btn-green { background:var(--good); color:#fff; }
+  .btn-red { background:#fff; color:var(--bad); border:1px solid #fecaca; }
+  .btn-call { background:var(--good); color:#fff; font-size:.95rem; padding:.62rem 1.3rem; }
+  .btn-sm { padding:.3rem .65rem; font-size:.77rem; border-radius:7px; }
+  .btn-block { display:block; width:100%; text-align:center; }
+  .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .row.tight { gap:.3rem; }
+  form.inline { display:inline; }
+
+  .flash { background:var(--brand-lt); border:1px solid #eedcc0; color:var(--brand-dk);
+           padding:.62rem 1rem; border-radius:9px; margin-bottom:.6rem; font-weight:600; }
+  .empty { padding:2.2rem 1rem; text-align:center; color:var(--muted); }
+
+  .pill-nav { display:flex; gap:.35rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .pill-nav a { padding:.28rem .72rem; border-radius:99px; font-size:.8rem; font-weight:700;
+                background:#fff; border:1px solid var(--line); color:var(--muted); }
+  .pill-nav a.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .pill-nav a:hover { text-decoration:none; }
+
+  /* -------------------------------------------------------- call cards -- */
+  .callcard { display:flex; gap:.9rem; padding:.85rem 1rem; border-bottom:1px solid var(--line2);
+              align-items:flex-start; }
+  .callcard:last-child { border-bottom:none; }
+  .callcard:hover { background:#fafaf9; }
+  .callcard .main { flex:1; min-width:0; }
+  .callcard .co { font-weight:700; font-size:.97rem; }
+  .callcard .who { font-size:.83rem; color:var(--muted); margin-top:.05rem; }
+  .callcard .why { margin-top:.45rem; font-size:.85rem; background:var(--brand-lt);
+                   border-left:3px solid var(--brand); padding:.4rem .6rem;
+                   border-radius:0 7px 7px 0; }
+  .callcard .why b { color:var(--brand-dk); }
+  .callcard .meta { margin-top:.45rem; display:flex; gap:.45rem; flex-wrap:wrap;
+                    align-items:center; }
+  .callcard .act { display:flex; flex-direction:column; gap:.35rem; align-items:flex-end;
+                   flex:0 0 auto; }
+
+  .board { display:grid; grid-template-columns:repeat(6,minmax(158px,1fr));
+           gap:.6rem; overflow-x:auto; padding-bottom:.4rem; }
+  .col { background:#eeeeec; border-radius:10px; padding:.5rem; min-width:158px; }
+  .col h4 { font-size:.68rem; letter-spacing:.07em; text-transform:uppercase;
+            color:var(--muted); margin-bottom:.45rem; display:flex;
+            justify-content:space-between; }
+  .ticket { background:#fff; border:1px solid var(--line); border-radius:8px;
+            padding:.5rem .6rem; margin-bottom:.42rem; display:block; color:var(--text); }
+  .ticket:hover { text-decoration:none; border-color:var(--brand); }
+  .ticket .tn { font-weight:700; font-size:.82rem; }
+  .ticket .tm { font-size:.71rem; color:var(--muted); margin-top:.1rem; }
+
+  .timeline { border-left:2px solid var(--line); padding-left:1rem; margin-left:.4rem; }
+  .timeline .ev { position:relative; padding-bottom:.85rem; }
+  .timeline .ev::before { content:''; position:absolute; left:-1.36rem; top:.3rem;
+    width:9px; height:9px; border-radius:50%; background:var(--brand); border:2px solid #fff; }
+  .timeline .ev.system::before { background:var(--faint); }
+  .timeline .ev .t { font-weight:700; font-size:.85rem; }
+
+  .transcript { background:#fafaf8; border:1px solid var(--line2); border-radius:9px;
+                padding:.8rem .95rem; white-space:pre-wrap; font-size:.85rem;
+                line-height:1.65; max-height:26rem; overflow-y:auto; }
+  .script { background:#fff; border:1px solid var(--line); border-radius:9px;
+            padding:.8rem .95rem; margin-bottom:.6rem; }
+  .script .q { font-weight:700; }
+  .script .a { color:var(--muted); font-size:.84rem; margin-top:.2rem; }
+  .speak { font-size:1.02rem; line-height:1.6; background:var(--brand-lt);
+           border:1px solid #eedcc0; border-radius:9px; padding:.9rem 1.05rem;
+           color:#4a3812; }
+
+  .bars { display:flex; flex-direction:column; gap:.4rem; }
+  .barrow { display:flex; align-items:center; gap:.7rem; }
+  .barrow .bl { width:150px; font-size:.8rem; font-weight:600; flex:0 0 150px; }
+  .barrow .bb { flex:1; background:var(--line2); border-radius:5px; height:20px;
+                overflow:hidden; }
+  .barrow .bb i { display:block; height:100%; background:var(--brand); }
+  .barrow .bv { width:88px; text-align:right; font-size:.8rem;
+                font-variant-numeric:tabular-nums; font-weight:700; }
+  @media (max-width:680px){ .barrow .bl{width:100px;flex:0 0 100px;font-size:.74rem;} }
+
+  .hourchart { display:flex; align-items:flex-end; gap:.35rem; height:96px; }
+  .hourchart .h { flex:1; display:flex; flex-direction:column; justify-content:flex-end;
+                  align-items:center; gap:.25rem; height:100%; }
+  .hourchart .h i { display:block; width:100%; background:var(--brand); border-radius:3px 3px 0 0;
+                    min-height:2px; }
+  .hourchart .h.best i { background:var(--good); }
+  .hourchart .h span { font-size:.64rem; color:var(--faint); font-weight:700; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand">Royal <span>Grind</span><small>AI sales intelligence</small></div>
+    <nav>
+      <div class="navgroup">The floor</div>
+      <a href="{{ url_for('today') }}" class="{{ 'on' if request.endpoint in ('today','prospect','call_console') }}">Today</a>
+      <a href="{{ url_for('work') }}" class="{{ 'on' if request.endpoint == 'work' }}">My work</a>
+      <a href="{{ url_for('pipeline') }}" class="{{ 'on' if request.endpoint == 'pipeline' }}">Pipeline</a>
+      <a href="{{ url_for('sequences_view') }}" class="{{ 'on' if request.endpoint == 'sequences_view' }}">Sequences</a>
+      <div class="navgroup">The database</div>
+      <a href="{{ url_for('search') }}" class="{{ 'on' if request.endpoint == 'search' }}">Prospect search</a>
+      <a href="{{ url_for('companies') }}" class="{{ 'on' if request.endpoint in ('companies','company_detail') }}">Companies</a>
+      <a href="{{ url_for('data_quality') }}" class="{{ 'on' if request.endpoint == 'data_quality' }}">Data quality</a>
+      <div class="navgroup">What we've learned</div>
+      <a href="{{ url_for('intelligence') }}" class="{{ 'on' if request.endpoint == 'intelligence' }}">Signal performance</a>
+      {% if has_role('manager') %}
+        <a href="{{ url_for('exec_view') }}" class="{{ 'on' if request.endpoint == 'exec_view' }}">Executive view</a>
+      {% endif %}
+      {% if has_role('admin') %}
+        <div class="navgroup">Settings</div>
+        <a href="{{ url_for('settings') }}" class="{{ 'on' if request.endpoint == 'settings' }}">Organization</a>
+        <a href="{{ url_for('settings_compliance') }}" class="{{ 'on' if request.endpoint == 'settings_compliance' }}">Compliance</a>
+        <a href="{{ url_for('settings_audit') }}" class="{{ 'on' if request.endpoint == 'settings_audit' }}">Activity log</a>
+        {% if has_role('owner') %}
+          <a href="{{ url_for('settings_users') }}" class="{{ 'on' if request.endpoint == 'settings_users' }}">Users</a>
+        {% endif %}
+      {% endif %}
+    </nav>
+    <div class="enginebox">
+      <b><span class="dot {{ 'live' if engine.live else 'off' }}"></span>{{ engine.label }}</b>
+      {{ engine.detail }}
+    </div>
+    <div class="enginebox" style="border-top:1px solid var(--ink3)">
+      <b><span class="dot {{ 'live' if phone_status.provider == 'vonage' and phone_status.ready else 'off' }}"></span>Phone: {{ phone_status.provider }}</b>
+      {{ phone_status.detail }}
+    </div>
+  </aside>
+
+  <div class="body">
+    <div class="topbar">
+      <div class="crumb">{% block crumb %}{% endblock %}</div>
+      <div class="spacer"></div>
+      {% if user %}
+        <div class="viewer">
+          <span class="avatar">{{ user.name|initials }}</span>
+          <span>
+            <b style="color:var(--text)">{{ user.name }}</b>
+            <span class="badge neutral">{{ user.role }}</span>
+            <span style="display:block;font-size:.72rem">{{ user.org_name }}</span>
+          </span>
+          <form method="post" action="{{ url_for('logout') }}" class="inline">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button class="btn btn-ghost btn-sm">Sign out</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+    <main>
+      {% with messages = get_flashed_messages() %}
+        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+</body>
+</html>

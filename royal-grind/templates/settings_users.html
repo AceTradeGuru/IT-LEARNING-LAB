@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block crumb %}Settings / Users{% endblock %}
+{% block content %}
+
+<h1>Users</h1>
+<p class="sub">
+  Four roles, narrowest to widest. A member works their own list; a manager sees their
+  team; an admin holds the two settings that can get a company sued — telephony and
+  suppression; an owner can erase a person and add the next owner.
+</p>
+
+<div class="grid split">
+  <div>
+    <div class="card pad0">
+      <div class="tablewrap"><table>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Seat</th>
+          <th class="num">Last seen</th><th></th></tr></thead>
+        <tbody>
+        {% for u in users %}
+          <tr>
+            <td><div class="person"><span class="avatar">{{ u.name|initials }}</span>
+              <span class="nm">{{ u.name }}</span></div></td>
+            <td class="tiny mono muted">{{ u.email }}</td>
+            <td><span class="badge {{ 'brand' if u.role in ('owner','admin') else 'neutral' }}">{{ u.role }}</span></td>
+            <td class="tiny muted">{{ u.rep_name or '—' }}</td>
+            <td class="num tiny muted">{{ u.last_login_at|since }}</td>
+            <td class="num">
+              {% if u.status == 'active' and u.id != user.id %}
+                <form method="post">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <input type="hidden" name="action" value="deactivate">
+                  <input type="hidden" name="user_id" value="{{ u.id }}">
+                  <button class="btn btn-red btn-sm">Revoke</button>
+                </form>
+              {% elif u.status != 'active' %}
+                <span class="badge bad">disabled</span>
+              {% else %}
+                <span class="tiny faint">you</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Add someone</h3>
+      <form method="post">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="invite">
+        <label for="name">Name</label><input id="name" name="name" required>
+        <label for="email">Email</label><input id="email" name="email" type="email" required>
+        <label for="role">Role</label>
+        <select id="role" name="role">
+          <option value="member">member — their own list</option>
+          <option value="manager">manager — their team</option>
+          <option value="admin">admin — everything in the app</option>
+          <option value="owner">owner — plus users and erasure</option>
+        </select>
+        <label for="password">Temporary password</label>
+        <input id="password" name="password" type="password" required>
+        <p class="tiny faint">At least 12 characters. There is no email invite flow yet —
+          you set it and tell them. See DEPLOY.md.</p>
+        <button class="btn btn-primary" style="margin-top:.6rem">Add user</button>
+      </form>
+    </div>
+
+    <div class="notebox">
+      <b>Revoking is not deleting.</b> The account is disabled and stops being able to
+      sign in; the rows it created — calls, notes, deals — stay, because they are the
+      organization's record of what happened, not the person's.
+    </div>
+  </div>
+</div>
+{% endblock %}

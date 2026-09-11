@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Organization{% endblock %}
+{% block crumb %}Settings / Organization{% endblock %}
+{% block content %}
+
+<h1>{{ org.name }}</h1>
+<p class="sub">These are not cosmetic. The pitch and modes go into every AI prompt, and
+  the calling window is enforced against the prospect's clock before any dial.</p>
+
+<div class="grid split">
+  <div>
+    <form method="post">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+      <div class="card">
+        <h2 style="margin-top:0">What you sell</h2>
+        <label for="pitch">In one or two sentences</label>
+        <textarea id="pitch" name="pitch" maxlength="600">{{ org.pitch }}</textarea>
+        <p class="tiny faint">Every call plan and follow-up email is written from this.
+          Generic AI sales copy is worse than none — it puts a rep on the phone offering
+          reefer capacity when you run dry van.</p>
+
+        <label>Modes you can actually cover</label>
+        <div class="row">
+          {% for m in ['ltl', 'ftl', 'flatbed', 'reefer', 'expedited', 'intermodal'] %}
+            <label class="plain">
+              <input type="checkbox" name="modes" value="{{ m }}"
+                     {{ 'checked' if m in org.modes.split(',') }}> {{ m|upper }}
+            </label>
+          {% endfor %}
+        </div>
+        <p class="tiny faint">A signal that predicts flatbed volume is worth a fraction to
+          a broker with no flatbed capacity, and the scoring engine treats it that way.</p>
+
+        <label for="home_markets">Home markets</label>
+        <input id="home_markets" name="home_markets" value="{{ org.home_markets }}"
+               placeholder="MO,KS,AR,OK">
+        <p class="tiny faint">Two-letter codes, comma separated. Density is where margin
+          comes from, so companies here score higher.</p>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">Calling rules</h2>
+        <div class="grid g2">
+          <div>
+            <label for="quiet_start">Earliest (prospect's local time)</label>
+            <input id="quiet_start" name="quiet_start" type="number" min="0" max="23" value="{{ org.quiet_start }}">
+          </div>
+          <div>
+            <label for="quiet_end">Latest</label>
+            <input id="quiet_end" name="quiet_end" type="number" min="1" max="24" value="{{ org.quiet_end }}">
+          </div>
+        </div>
+        <p class="tiny faint">Enforced in the <b>prospect's</b> timezone, not yours. A
+          broker in Kansas City dialing California at 7:40am local is the easiest
+          violation to commit by accident, and an opportunity-ranked list would commit it
+          every morning without this.</p>
+
+        <label for="recording_policy">Call recording</label>
+        <select id="recording_policy" name="recording_policy">
+          <option value="off" {{ 'selected' if org.recording_policy == 'off' }}>Off — never record</option>
+          <option value="one_party" {{ 'selected' if org.recording_policy == 'one_party' }}>One-party consent jurisdictions only</option>
+          <option value="all_party" {{ 'selected' if org.recording_policy == 'all_party' }}>All-party — announce and record everywhere</option>
+        </select>
+        <p class="tiny faint">On <b>one-party</b>, a call touching any of the
+          {{ all_party|length }} all-party states is not recorded. On <b>all-party</b>, the
+          announcement plays before the connect. An unknown prospect location is always
+          treated as the strict case. The basis is written onto every call row at the
+          time — it cannot be reconstructed afterwards.</p>
+
+        <label for="retention_days">Retain prospect personal data for (days)</label>
+        <input id="retention_days" name="retention_days" type="number" min="30" value="{{ org.retention_days }}">
+        <p class="tiny faint">"We might call them one day" is not a lawful basis for
+          holding somebody's mobile number forever. See
+          <a href="{{ url_for('settings_compliance') }}">Compliance</a>.</p>
+      </div>
+
+      <button class="btn btn-primary">Save</button>
+    </form>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Suppression list</h3>
+      <p class="tiny muted" style="margin-bottom:.6rem">
+        Checked before every dial and every send, with no override. {{ suppression|length }}
+        entr{{ 'y' if suppression|length == 1 else 'ies' }}.
+      </p>
+      <form method="post" action="{{ url_for('settings_suppress') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div class="row">
+          <select name="kind" style="width:auto">
+            <option value="phone">Phone</option>
+            <option value="email">Email</option>
+            <option value="domain">Domain</option>
+          </select>
+          <input name="value" placeholder="+1 816 555 0143" style="flex:1;min-width:150px">
+        </div>
+        <input name="reason" placeholder="Reason — it shows on the block" style="margin-top:.4rem">
+        <button class="btn btn-ghost btn-sm" style="margin-top:.5rem">Add</button>
+      </form>
+
+      <div class="tablewrap" style="margin-top:.9rem;max-height:22rem;overflow-y:auto">
+        <table>
+          <tbody>
+          {% for s in suppression %}
+            <tr>
+              <td class="tiny">{{ s.kind }}</td>
+              <td class="mono tiny">{{ s.value }}</td>
+              <td class="tiny muted">{{ s.reason or s.source }}</td>
+            </tr>
+          {% else %}
+            <tr><td class="empty tiny">Nothing suppressed.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>AI spend</h3>
+      <div style="font-size:1.6rem;font-weight:800;letter-spacing:-.8px">${{ '%.2f'|format(spend / 100) }}</div>
+      <div class="track"><i class="{{ 'bad' if spend >= org.ai_cents_cap * 0.9 else 'good' }}"
+        style="width:{{ [ (spend / (org.ai_cents_cap or 1) * 100)|round|int, 100 ]|min }}%"></i></div>
+      <p class="tiny muted" style="margin-top:.4rem">
+        of ${{ '%.0f'|format(org.ai_cents_cap / 100) }} this month, metered from actual
+        token usage. The cap is checked <i>before</i> a request is made — a guard that
+        reports overspend afterwards is a receipt, not a limit.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Engines</h3>
+      <p class="small"><b>Intelligence:</b> {{ engine.label }}</p>
+      <p class="tiny muted">{{ engine.detail }}</p>
+      <p class="small" style="margin-top:.7rem"><b>Phone:</b> {{ phone_status.provider }}</p>
+      <p class="tiny muted">{{ phone_status.detail }}</p>
+      <p class="small" style="margin-top:.7rem"><b>Data:</b> {{ data_status.provider }}</p>
+      <p class="tiny muted">{{ data_status.detail }}</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

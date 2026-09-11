@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Today{% endblock %}
+{% block crumb %}Today{% endblock %}
+{% block content %}
+
+<div class="row" style="justify-content:space-between;align-items:flex-end">
+  <div>
+    <h1>{{ rows|length }} people to call today</h1>
+    <p class="sub" style="margin-bottom:.6rem">
+      Ranked by opportunity, not by when they were added. Every score opens into the
+      reasons behind it.
+    </p>
+  </div>
+  {% if reps|length > 1 %}
+  <form method="get" class="row tight" style="margin-bottom:1rem">
+    <select name="rep" onchange="this.form.submit()" style="width:auto">
+      {% for r in reps %}
+        <option value="{{ r.id }}" {{ 'selected' if rep and r.id == rep.id }}>{{ r.name }}</option>
+      {% endfor %}
+    </select>
+    <noscript><button class="btn btn-ghost btn-sm">Go</button></noscript>
+  </form>
+  {% endif %}
+</div>
+
+<div class="grid g4" style="margin-bottom:1.2rem">
+  <div class="kpi">
+    <div class="lbl">Dials today</div>
+    <div class="num">{{ calls_today.n or 0 }}<span class="faint" style="font-size:.9rem;font-weight:600">/{{ rep.daily_call_goal if rep else 40 }}</span></div>
+    <div class="track"><i style="width:{{ [((calls_today.n or 0) / (rep.daily_call_goal if rep and rep.daily_call_goal else 40) * 100)|round|int, 100]|min }}%"></i></div>
+    <div class="note" style="margin-top:.35rem">{{ calls_today.c or 0 }} reached a person</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Live on the list</div>
+    <div class="num">{{ total_scored }}</div>
+    <div class="note">Assigned to {{ rep.name if rep else 'you' }}, scored this morning</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Due today</div>
+    <div class="num">{{ tasks|length }}</div>
+    <div class="note">Follow-ups and commitments, on <a href="{{ url_for('work') }}">My work</a></div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Held back</div>
+    <div class="num">{{ blocked|length }}</div>
+    <div class="note">Suppressed, snoozed, or outside calling hours</div>
+  </div>
+</div>
+
+{% if hours %}
+  {% set best = hours|sort(attribute='rate')|last %}
+  <div class="card">
+    <div class="row" style="align-items:flex-start;gap:1.4rem">
+      <div style="flex:1;min-width:240px">
+        <h3>When your calls actually connect</h3>
+        <p class="tiny muted" style="margin-bottom:.7rem">
+          From {{ hours|sum(attribute='attempts') }} of your own calls — not an industry
+          study. Hours with fewer than five attempts are left out.
+        </p>
+        <div class="hourchart">
+          {% for h in hours %}
+            <div class="h {{ 'best' if h.hour == best.hour }}" title="{{ h.connects }}/{{ h.attempts }}">
+              <i style="height:{{ (h.rate / (best.rate or 1) * 100)|round|int }}%"></i>
+              <span>{{ h.hour if h.hour < 13 else h.hour - 12 }}{{ 'a' if h.hour < 12 else 'p' }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div style="flex:0 0 190px">
+        <div class="eyebrow">Best hour</div>
+        <div style="font-size:1.5rem;font-weight:800;letter-spacing:-.6px">
+          {{ best.hour if best.hour < 13 else best.hour - 12 }}{{ 'am' if best.hour < 12 else 'pm' }}
+        </div>
+        <div class="tiny muted">{{ best.rate|pct }} of dials reach a person, against
+          {{ (hours|sum(attribute='connects') / hours|sum(attribute='attempts'))|pct }} across the day.</div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+<div class="card pad0">
+  <div class="cardhead">
+    <h2>The list</h2>
+    <span class="badge neutral">Rescored {{ rows[0].target.score_at|since if rows and rows[0].target.score_at else 'just now' }}</span>
+    <div class="spacer"></div>
+    <span class="tiny muted">Showing {{ rows|length }} of {{ total_scored }}</span>
+  </div>
+
+  {% for r in rows %}
+    <div class="callcard">
+      <div class="scorebox {{ r.band }}">
+        <b>{{ r.score }}</b><span>{{ r.band }}</span>
+      </div>
+      <div class="main">
+        <div class="co">
+          <a href="{{ url_for('prospect', target_id=r.target.id) }}">{{ r.company.name }}</a>
+          <span class="tiny faint">{{ r.company.city }}, {{ r.company.state }}</span>
+        </div>
+        <div class="who">
+          {% if r.contact %}
+            {{ r.contact.name }} — {{ r.contact.title }}
+            {% if r.contact.role_type == 'decision_maker' %}<span class="badge good">decision maker</span>
+            {% elif r.contact.role_type == 'gatekeeper' %}<span class="badge warm">gatekeeper</span>{% endif %}
+          {% else %}<span class="faint">no contact on this record</span>{% endif %}
+        </div>
+
+        {% if r.why_now %}
+          <div class="why"><b>Why now —</b> {{ r.why_now.detail }}</div>
+        {% endif %}
+
+        <div class="meta">
+          {% set dial = r.points|selectattr('kind', 'in', ['direct_dial','mobile'])|list|first %}
+          {% if dial %}
+            <span class="prov {{ dial.status }}">{{ dial.value }}</span>
+          {% else %}
+            <span class="prov invalid">no direct line</span>
+          {% endif %}
+          {% if r.company.loads_per_month %}
+            <span class="badge neutral">~{{ r.company.loads_per_month }} loads/mo</span>{% endif %}
+          {% if r.company.modes %}
+            <span class="badge neutral">{{ r.company.modes.upper().replace(',', ' · ') }}</span>{% endif %}
+          {% if r.target.attempts %}
+            <span class="tiny faint">{{ r.target.attempts }} attempt{{ 's' if r.target.attempts != 1 }},
+              {{ r.target.connects }} reached · last {{ r.target.last_touch_at|since }}</span>
+          {% else %}
+            <span class="tiny faint">never called</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="act">
+        <form method="post" action="{{ url_for('place_call', target_id=r.target.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-call">Call</button>
+        </form>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('prospect', target_id=r.target.id) }}">Open</a>
+        <form method="post" action="{{ url_for('prospect_snooze', target_id=r.target.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="days" value="7">
+          <input type="hidden" name="back" value="{{ url_for('today') }}">
+          <button class="btn btn-ghost btn-sm">Snooze 7d</button>
+        </form>
+      </div>
+    </div>
+  {% else %}
+    <div class="empty">
+      <p><b>Nothing on the list.</b></p>
+      <p class="tiny">Either every target is snoozed and suppressed, or none are assigned
+        to this rep. <a href="{{ url_for('search') }}">Find some prospects</a>.</p>
+    </div>
+  {% endfor %}
+
+  {% if rows and rows|length < total_scored %}
+    <div style="padding:.75rem 1.2rem;border-top:1px solid var(--line2)">
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('today', rep=rep.id if rep else None, size=size + 25) }}">Show 25 more</a>
+    </div>
+  {% endif %}
+</div>
+
+{% if tasks %}
+  <h2>Owed today</h2>
+  <div class="card pad0">
+    <div class="tablewrap"><table>
+      <thead><tr><th>Due</th><th>What</th><th>Who</th><th></th></tr></thead>
+      <tbody>
+      {% for t in tasks %}
+        <tr>
+          <td class="nowrap {{ 'muted' if t.due_at >= today.isoformat() }}">
+            {% if t.due_at < today.isoformat() %}<span class="badge bad">{{ t.due_at|nicedate }}</span>
+            {% else %}{{ t.due_at|nicedate }}{% endif %}
+          </td>
+          <td><b>{{ t.title }}</b>
+            {% if t.created_by != 'rep' %}<span class="badge neutral">{{ t.created_by }}</span>{% endif %}</td>
+          <td class="tiny muted">{{ t.contact_name or '—' }} · {{ t.company_name }}</td>
+          <td class="num">
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('prospect', target_id=t.target_id) }}">Open</a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+{% endif %}
+
+{% if blocked %}
+  <h2>Held back — {{ blocked|length }}</h2>
+  <p class="sub">These scored well enough to call and something stopped them. Shown so a
+    suppression list is visible rather than a silent hole in the day.</p>
+  <div class="card pad0">
+    <div class="tablewrap"><table>
+      <thead><tr><th class="num">Score</th><th>Company</th><th>Why it's held</th><th></th></tr></thead>
+      <tbody>
+      {% for r in blocked[:12] %}
+        <tr>
+          <td class="num"><span class="score {{ r.band }}">{{ r.score }}</span></td>
+          <td><a href="{{ url_for('prospect', target_id=r.target.id) }}">{{ r.company.name }}</a>
+              <span class="tiny faint">{{ r.company.state }}</span></td>
+          <td class="tiny">{% for b in r.blockers %}<div>{{ b }}</div>{% endfor %}</td>
+          <td class="num"><a class="btn btn-ghost btn-sm" href="{{ url_for('prospect', target_id=r.target.id) }}">Open</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+{% endif %}
+
+{% endblock %}

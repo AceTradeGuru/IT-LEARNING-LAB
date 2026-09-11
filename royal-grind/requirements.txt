@@ -1,0 +1,20 @@
+# Royal Grind runtime dependencies.
+#
+# Pinned to minor versions: a surprise Flask or Werkzeug upgrade in a deploy is
+# how a working app stops booting on a Tuesday. Bump these deliberately.
+Flask~=3.1
+Werkzeug~=3.1
+gunicorn~=23.0
+
+# The Claude-backed intelligence layer. The app runs without credentials — see
+# ai_engine.py — but not without the package installed.
+anthropic~=1.5
+
+# Postgres driver. Unused locally (SQLite is the fallback when DATABASE_URL is
+# unset), required on Render. The binary wheel avoids needing libpq at build time.
+psycopg[binary]~=3.2
+
+# Vonage authenticates with an RS256 JWT signed by the application private key,
+# so this is required whenever TELEPHONY_PROVIDER=vonage. The [crypto] extra is
+# what provides RS256; plain PyJWT cannot sign it.
+PyJWT[crypto]~=2.10

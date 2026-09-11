@@ -1,0 +1,57 @@
+# Run Royal Grind's smoke suite on every push and pull request.
+#
+# One job, because there is one question worth asking automatically: does the
+# app still work end to end. The suite boots it against a scratch database,
+# walks every route, drives a call from dial to logged debrief, and asserts that
+# the things which must fail — cross-tenant reads, unsigned webhooks, a POST
+# with no CSRF token, a production config with no secret key — actually fail.
+#
+# No API key and no phone account are set here, on purpose. Without credentials
+# the intelligence layer falls back to its offline engine and the phone layer to
+# the simulator, so CI exercises exactly the path a fresh clone takes and never
+# spends money to tell you a template renders.
+name: royal-grind
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "royal-grind/**"
+      - ".github/workflows/royal-grind.yml"
+  pull_request:
+    paths:
+      - "royal-grind/**"
+      - ".github/workflows/royal-grind.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: royal-grind
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: royal-grind/requirements.txt
+
+      # The full runtime set, not a trimmed one: a deploy that cannot install
+      # its own requirements is exactly the failure this is meant to catch.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile every module
+        run: python -m compileall -q .
+
+      - name: Smoke test
+        run: python smoke_test.py
+
+      # The seed is part of the product — it is what a new clone runs first.
+      # A seed that crashes is a broken first impression.
+      - name: Build the demo database
+        run: python grind_db.py

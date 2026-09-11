@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Royal Grind — create an organization</title>
+<style>
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+         background:#101624; color:#e8eaef; display:flex; align-items:center;
+         justify-content:center; min-height:100vh; margin:0; padding:1.5rem; }
+  .box { width:100%; max-width:420px; }
+  h1 { font-size:1.5rem; letter-spacing:-.5px; margin:0 0 .3rem; }
+  h1 span { color:#e0b872; }
+  p.lede { color:#8b94a8; font-size:.86rem; margin:0 0 1.4rem; line-height:1.6; }
+  form { background:#1a2336; border:1px solid #27324a; border-radius:12px; padding:1.4rem; }
+  label { display:block; font-size:.7rem; font-weight:700; color:#8b94a8;
+          letter-spacing:.06em; text-transform:uppercase; margin:.9rem 0 .3rem; }
+  label:first-child { margin-top:0; }
+  input { width:100%; padding:.6rem .75rem; border:1px solid #2f3b55; border-radius:8px;
+          background:#101624; color:#e8eaef; font-size:.95rem; box-sizing:border-box; }
+  input:focus { outline:none; border-color:#b4813a; }
+  button { width:100%; margin-top:1.2rem; padding:.65rem; border:none; border-radius:8px;
+           background:#b4813a; color:#fff; font-weight:700; font-size:.95rem; cursor:pointer; }
+  .hint { font-size:.75rem; color:#6b7488; margin-top:.3rem; }
+  .flash { background:#3b1d1d; border:1px solid #7f1d1d; color:#fca5a5; padding:.6rem .8rem;
+           border-radius:8px; margin-bottom:1rem; font-size:.86rem; }
+  a { color:#e0b872; } .foot { margin-top:1rem; font-size:.8rem; color:#7d8798; }
+</style></head>
+<body>
+<div class="box">
+  <h1>Create an <span>organization</span></h1>
+  <p class="lede">You become the owner. Everything is scoped to this organization —
+     no other tenant can read a row of it.</p>
+  {% with messages = get_flashed_messages() %}
+    {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+  {% endwith %}
+  <form method="post">
+    <label for="org_name">Organization</label>
+    <input id="org_name" name="org_name" required autofocus>
+    <label for="name">Your name</label>
+    <input id="name" name="name" required>
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" required>
+    <div class="hint">At least 12 characters. Length beats punctuation.</div>
+    <button type="submit">Create organization</button>
+  </form>
+  <div class="foot">Already have an account? <a href="{{ url_for('login') }}">Sign in</a>.</div>
+</div>
+</body></html>

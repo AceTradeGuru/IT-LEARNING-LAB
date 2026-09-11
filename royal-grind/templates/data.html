@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Data quality{% endblock %}
+{% block crumb %}Data quality{% endblock %}
+{% block content %}
+
+<h1>What the data is worth</h1>
+<p class="sub">
+  Every vendor quotes a coverage percentage and none of them mean the same thing. The
+  number that matters is how many records a rep will dial this quarter that cannot reach
+  anybody — and which ones.
+</p>
+
+<div class="grid g4" style="margin-bottom:1.2rem">
+  <div class="kpi">
+    <div class="lbl">Will not connect</div>
+    <div class="num" style="color:var(--bad)">{{ report.dead_records }}</div>
+    <div class="note">Dead numbers plus the share of guessed ones that historically
+      don't land — about {{ report.wasted_hours }} rep-hours</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Contacts you can dial</div>
+    <div class="num">{{ report.reachable_pct }}%</div>
+    <div class="note">{{ report.contacts_with_dialable }} of {{ report.contacts }} have a
+      direct line we'd stand behind</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Verifications expired</div>
+    <div class="num">{{ report.stale_verifications }}</div>
+    <div class="note">Were verified; older than {{ report.ttl_days }} days, so they now
+      read as probable</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Contacts who have left</div>
+    <div class="num">{{ report.departed }}</div>
+    <div class="note">The record still names them. Re-source before anybody dials.</div>
+  </div>
+</div>
+
+<div class="grid split">
+  <div>
+    <div class="card">
+      <h2 style="margin-top:0">Every field we hold, by how much we trust it</h2>
+      <div class="bars" style="margin-top:.8rem">
+        {% for key, count in report.buckets.items() %}
+          <div class="barrow">
+            <div class="bl"><span class="prov {{ key }}">{{ key.replace('_',' ') }}</span></div>
+            <div class="bb"><i style="width:{{ report.pct[key] }}%;
+              background:{{ {'verified':'var(--good)','probable':'var(--cool)',
+                             'guessed':'var(--warm)','catch_all':'var(--warm)',
+                             'invalid':'var(--bad)'}[key] }}"></i></div>
+            <div class="bv">{{ count }} · {{ report.pct[key] }}%</div>
+          </div>
+        {% endfor %}
+      </div>
+      <p class="tiny muted" style="margin-top:.9rem">
+        {{ report.points }} fields across {{ report.contacts }} contacts at
+        {{ report.companies }} companies — {{ report.phones }} numbers and
+        {{ report.emails }} addresses. "Expired" verifications are counted as probable
+        here, not as verified, which is why this does not match what the rows say.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">What your own dialing has proved</h2>
+      <div class="grid g2">
+        <div class="notebox">
+          <div class="eyebrow">Fields verified by a connect</div>
+          <div style="font-size:1.5rem;font-weight:800;color:var(--good)">{{ first_party }}</div>
+          <div class="tiny">First-party, and fresher than anything purchasable —
+            somebody answered.</div>
+        </div>
+        <div class="notebox">
+          <div class="eyebrow">Numbers retired by failure</div>
+          <div style="font-size:1.5rem;font-weight:800;color:var(--bad)">{{ retired }}</div>
+          <div class="tiny">Three hard failures retires a number, so the next rep doesn't
+            spend the dial.</div>
+        </div>
+      </div>
+      <p class="tiny muted" style="margin-top:.8rem">
+        This is the compounding asset. A verification service sells you a check; a connect
+        <i>is</i> one, it cost nothing extra, and it happened on the account you actually
+        sell to.
+      </p>
+    </div>
+
+    <h2>Fix these first</h2>
+    <p class="sub">Ranked by what the broken record will cost — how broken it is, weighted
+      by whether a rep is about to hit it. A percentage on a dashboard never gets fixed;
+      a list of names with a button does.</p>
+    <div class="card pad0">
+      <div class="tablewrap"><table>
+        <thead><tr><th>Contact</th><th>Company</th><th>What's wrong</th><th class="num">Cost</th><th></th></tr></thead>
+        <tbody>
+        {% for w in worst %}
+          <tr>
+            <td><b class="small">{{ w.contact.name }}</b>
+              <div class="tiny faint">{{ w.contact.title }}</div></td>
+            <td class="small"><a href="{{ url_for('company_detail', company_id=w.contact.company_id) }}">{{ w.contact.company }}</a></td>
+            <td class="tiny">{% for p in w.problems %}<div>· {{ p }}</div>{% endfor %}</td>
+            <td class="num"><b>{{ w.cost }}</b></td>
+            <td class="num">
+              <form method="post" action="{{ url_for('contact_verify', contact_id=w.contact.id) }}">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="back" value="{{ url_for('data_quality') }}">
+                <button class="btn btn-ghost btn-sm">Re-verify</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="empty">Nothing is broken. That is unusual — check
+            that verification has actually run.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Where it came from</h3>
+      <p class="tiny muted" style="margin-bottom:.6rem">
+        Every field carries its source. Trust is where a source starts before
+        verification, not where it ends up.
+      </p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Source</th><th class="num">Fields</th><th class="num">Verified</th><th class="num">Dead</th></tr></thead>
+        <tbody>
+        {% for s in by_source %}
+          <tr>
+            <td class="small">{{ s.source.replace('_',' ') }}
+              <div class="tiny faint">base trust {{ trust.get(s.source, '—') }}</div></td>
+            <td class="num">{{ s.n }}</td>
+            <td class="num">{{ s.verified }}</td>
+            <td class="num {{ 'score bad' if s.invalid }}">{{ s.invalid }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h3>Provider</h3>
+      <p class="small"><b>{{ data_status.provider }}</b></p>
+      <p class="tiny muted">{{ data_status.detail }}</p>
+    </div>
+
+    <div class="notebox">
+      <b>Why this page exists.</b> The strategy this product was scoped from rates
+      "accurate contact information" a 9 out of 10 and "keeping data continuously
+      updated" a 10. Version one does not beat that by out-collecting anybody. It
+      beats the status quo by being honest about which fields are trustworthy, and by
+      turning the org's own dialing into a verification stream nobody can buy.
+    </div>
+  </div>
+</div>
+{% endblock %}

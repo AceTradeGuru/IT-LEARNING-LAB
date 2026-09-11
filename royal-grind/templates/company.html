@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}{{ company.name }}{% endblock %}
+{% block crumb %}<a href="{{ url_for('companies') }}">Companies</a> / {{ company.name }}{% endblock %}
+{% block content %}
+
+<h1>{{ company.name }}</h1>
+<p class="sub">{{ company.industry }}{% if company.naics %} · NAICS {{ company.naics }}{% endif %}
+  · {{ company.city }}, {{ company.state }} · {{ company.timezone }}</p>
+
+<div class="grid g4" style="margin-bottom:1.2rem">
+  <div class="kpi"><div class="lbl">Revenue (est)</div>
+    <div class="num sm">{{ company.revenue_est|money if company.revenue_est else '—' }}</div>
+    <div class="note">{{ company.employees or '?' }} employees</div></div>
+  <div class="kpi"><div class="lbl">Freight volume</div>
+    <div class="num sm">{{ company.loads_per_month or '—' }}<span class="faint" style="font-size:.8rem;font-weight:600">/mo</span></div>
+    <div class="note">{{ company.dock_count or '?' }} docks · {{ company.shipper_type or 'type unknown' }}</div></div>
+  <div class="kpi"><div class="lbl">Modes</div>
+    <div class="num sm">{{ company.modes.upper().replace(',', ' ') if company.modes else '—' }}</div>
+    <div class="note">What they actually move</div></div>
+  <div class="kpi"><div class="lbl">Record confidence</div>
+    <div class="num sm">{{ company.confidence }}</div>
+    <div class="note">{{ company.source.replace('_',' ') }} · checked {{ company.last_verified|since }}</div></div>
+</div>
+
+<div class="grid split">
+  <div>
+    <div class="card">
+      <h2 style="margin-top:0">People</h2>
+      {% for c in contacts %}
+        <div style="padding:.8rem 0;border-bottom:1px solid var(--line2)">
+          <div class="row" style="justify-content:space-between;align-items:flex-start">
+            <div>
+              <b>{{ c.name }}</b>
+              <span class="badge {{ 'good' if c.role_type == 'decision_maker' else 'warm' if c.role_type == 'gatekeeper' else 'neutral' }}">{{ c.role_type.replace('_',' ') }}</span>
+              {% if c.status == 'left_company' %}<span class="badge bad">has left</span>{% endif %}
+              <div class="tiny muted">{{ c.title }}
+                {% if c.role_started %}· since {{ c.role_started|nicedate }}{% endif %}</div>
+            </div>
+            <div class="row tight">
+              <form method="post" action="{{ url_for('contact_verify', contact_id=c.id) }}">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="back" value="{{ url_for('company_detail', company_id=company.id) }}">
+                <button class="btn btn-ghost btn-sm">Re-verify</button>
+              </form>
+              {% if has_role('admin') %}
+                <a class="btn btn-ghost btn-sm" href="{{ url_for('contact_export', contact_id=c.id) }}">Export</a>
+              {% endif %}
+              {% if has_role('owner') %}
+                <form method="post" action="{{ url_for('contact_erase', contact_id=c.id) }}"
+                      onsubmit="return confirm('Destroy all personal data held about {{ c.name }}? The commercial record is redacted and kept. This cannot be undone.')">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <button class="btn btn-red btn-sm">Erase</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+          <div class="row tight" style="margin-top:.45rem">
+            {% for p in points.get(c.id, []) %}
+              {% set eff = effective(p) %}
+              <span class="prov {{ eff }}" title="{{ p.method or p.source }} · {{ p.last_verified or 'never checked' }}">
+                {{ p.value }}</span>
+            {% else %}
+              <span class="tiny faint">no contact details at all</span>
+            {% endfor %}
+          </div>
+        </div>
+      {% else %}
+        <p class="muted">No contacts on this company.</p>
+      {% endfor %}
+    </div>
+
+    {% if company.lanes or company.incumbents %}
+      <div class="grid g2">
+        {% if company.lanes %}
+          <div class="card"><h3>Known lanes</h3>
+            <ul style="margin:.4rem 0 0 1.1rem;color:var(--muted)">
+              {% for l in company.lanes.split('\n') if l.strip() %}<li class="small">{{ l }}</li>{% endfor %}
+            </ul></div>
+        {% endif %}
+        {% if company.incumbents %}
+          <div class="card"><h3>Who they use today</h3>
+            <p class="muted" style="margin-top:.3rem">{{ company.incumbents }}</p>
+            <p class="tiny faint" style="margin-top:.4rem">A named incumbent is the single
+              most useful fact on a cold call — it turns "who do you use" into "how's
+              {{ company.incumbents.split(',')[0] }} been treating you".</p></div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Signals</h3>
+      {% for t in triggers %}
+        <div style="padding:.5rem 0;border-bottom:1px solid var(--line2)">
+          <div class="row tight"><span class="badge good">{{ trigger_label(t.kind) }}</span>
+            <span class="tiny faint">{{ t.observed_at|since }}</span></div>
+          <div style="font-weight:700;font-size:.87rem;margin-top:.2rem">{{ t.headline }}</div>
+          <div class="tiny muted">{{ t.detail }}</div>
+          <div class="tiny faint" style="margin-top:.15rem">{{ t.source_name }} · confidence {{ t.strength }}/100</div>
+        </div>
+      {% else %}
+        <p class="muted tiny">Nothing observed at this company.</p>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <h3>On the list</h3>
+      {% for r in targets %}
+        <div class="row" style="justify-content:space-between;padding:.45rem 0;border-bottom:1px solid var(--line2)">
+          <div>
+            <a class="small" href="{{ url_for('prospect', target_id=r.target.id) }}">
+              <b>{{ r.contact.name if r.contact else 'no contact' }}</b></a>
+            <div class="tiny faint">{{ r.target.status.replace('_',' ') }} ·
+              {{ r.target.attempts }} attempts</div>
+          </div>
+          <span class="score {{ r.band }}">{{ r.score }}</span>
+        </div>
+      {% else %}
+        <p class="muted tiny">Nobody here is being worked.</p>
+      {% endfor %}
+    </div>
+
+    {% if deals %}
+      <div class="card">
+        <h3>Pipeline</h3>
+        {% for d in deals %}
+          <div class="tiny" style="padding:.3rem 0">
+            <b>{{ d.name }}</b><br>
+            {{ DEAL_LABELS.get(d.stage, d.stage) }} · {{ d.value_annual|money }}/yr
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

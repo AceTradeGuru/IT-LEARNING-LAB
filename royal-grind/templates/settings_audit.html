@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Activity log{% endblock %}
+{% block crumb %}Settings / Activity log{% endblock %}
+{% block content %}
+
+<h1>Activity log</h1>
+<p class="sub">
+  Every AI-generated artifact, every blocked call, every erasure, and who caused it.
+  Two reasons this table exists: outbound-contact law expects an organization to answer
+  "who did you contact, when, on what basis"; and when a model writes the words a
+  salesperson says, somebody eventually asks where a claim came from.
+</p>
+
+<div class="card pad0"><div class="tablewrap"><table>
+  <thead><tr><th>When</th><th>Action</th><th>Who</th><th>Entity</th><th>Engine</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="tiny muted nowrap">{{ r.created_at|since }}</td>
+      <td><span class="badge {{ 'bad' if 'blocked' in r.action or 'erase' in r.action
+                                else 'good' if r.action.startswith('ai.') else 'neutral' }}">{{ r.action }}</span></td>
+      <td class="tiny">{{ r.user_name or 'system' }}</td>
+      <td class="tiny mono muted">{{ r.entity or '—' }}</td>
+      <td class="tiny">{{ r.engine or '' }}</td>
+      <td class="tiny muted mono">{{ (r.detail or '')[:110] }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="empty">Nothing logged yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div></div>
+{% endblock %}
