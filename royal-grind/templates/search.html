@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Prospect search{% endblock %}
+{% block crumb %}Prospect search{% endblock %}
+{% block content %}
+
+<h1>Describe who you want</h1>
+<p class="sub">
+  Plain English, the way you'd say it to a colleague. The brief is parsed into filters
+  you can see and check — if it read you wrong, the filters show you where.
+</p>
+
+<div class="card">
+  <form method="post">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <textarea name="q" style="min-height:76px"
+      placeholder="Aerospace manufacturers in Missouri with $25M-$500M revenue that ship freight often">{{ query }}</textarea>
+    <div class="row" style="margin-top:.7rem">
+      <button class="btn btn-primary">Search</button>
+      <span class="tiny muted">Try: “food processors in Kansas running 50+ loads a month
+        who just announced an expansion”</span>
+    </div>
+  </form>
+</div>
+
+{% if filters %}
+  <div class="card">
+    <div class="cardhead" style="padding:0 0 .7rem;border-bottom:1px solid var(--line2);margin:-.1rem 0 .8rem">
+      <h3 style="margin:0">How it read you</h3>
+      <span class="badge {{ 'good' if engine == 'claude' else 'neutral' }}">{{ engine }}</span>
+    </div>
+    <p>{{ reasoning }}</p>
+    <div class="row tight" style="margin-top:.7rem">
+      {% for s in filters.states %}<span class="badge brand">{{ s }}</span>{% endfor %}
+      {% for m in filters.modes %}<span class="badge neutral">{{ m|upper }}</span>{% endfor %}
+      {% for s in filters.shipper_types %}<span class="badge neutral">{{ s }}</span>{% endfor %}
+      {% for k in filters.keywords %}<span class="badge neutral">{{ k }}</span>{% endfor %}
+      {% if filters.revenue_min %}<span class="badge neutral">≥ {{ filters.revenue_min|money }}</span>{% endif %}
+      {% if filters.revenue_max %}<span class="badge neutral">≤ {{ filters.revenue_max|money }}</span>{% endif %}
+      {% if filters.loads_min %}<span class="badge neutral">≥ {{ filters.loads_min }} loads/mo</span>{% endif %}
+      {% for t in filters.trigger_kinds %}<span class="badge good">{{ t.replace('_',' ') }}</span>{% endfor %}
+    </div>
+    {% if engine == 'offline' %}
+      <div class="warnbox" style="margin-top:.8rem">
+        No model is connected, so this was keyword matching, not comprehension. It handles
+        states, money ranges, modes and load counts; everything subtler it missed.
+      </div>
+    {% endif %}
+    <form method="post" action="{{ url_for('search_save') }}" class="row" style="margin-top:.8rem">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="q" value="{{ query }}">
+      <input type="hidden" name="engine" value="{{ engine }}">
+      <input name="name" placeholder="Name this search" style="max-width:280px">
+      <button class="btn btn-ghost btn-sm">Save</button>
+    </form>
+  </div>
+{% endif %}
+
+{% if query %}
+  <h2>{{ results|length }} match{{ 'es' if results|length != 1 }}, scored</h2>
+  <div class="card pad0">
+    {% for r in results %}
+      <div class="callcard">
+        <div class="scorebox {{ r.band }}"><b>{{ r.score }}</b><span>{{ r.band }}</span></div>
+        <div class="main">
+          <div class="co"><a href="{{ url_for('prospect', target_id=r.target.id) }}">{{ r.company.name }}</a>
+            <span class="tiny faint">{{ r.company.industry }} · {{ r.company.city }}, {{ r.company.state }}</span></div>
+          <div class="who">{% if r.contact %}{{ r.contact.name }} — {{ r.contact.title }}{% else %}<span class="faint">no contact</span>{% endif %}</div>
+          {% if r.why_now %}<div class="why"><b>Why now —</b> {{ r.why_now.detail }}</div>{% endif %}
+          <div class="meta">
+            {% if r.company.revenue_est %}<span class="badge neutral">{{ r.company.revenue_est|money }} revenue</span>{% endif %}
+            {% if r.company.loads_per_month %}<span class="badge neutral">~{{ r.company.loads_per_month }} loads/mo</span>{% endif %}
+            {% if r.company.modes %}<span class="badge neutral">{{ r.company.modes.upper().replace(',', ' · ') }}</span>{% endif %}
+            {% if r.blockers %}<span class="badge bad">held back</span>{% endif %}
+          </div>
+        </div>
+        <div class="act">
+          <a class="btn btn-ghost btn-sm" href="{{ url_for('prospect', target_id=r.target.id) }}">Open</a>
+        </div>
+      </div>
+    {% else %}
+      <div class="empty">
+        <p><b>Nothing matched.</b></p>
+        <p class="tiny">Loosen the brief — every clause narrows, and an over-specified
+          search and a misread one look identical from here.</p>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if saved %}
+  <h2>Saved</h2>
+  <div class="card pad0"><div class="tablewrap"><table>
+    <thead><tr><th>Name</th><th>Brief</th><th class="num">Saved</th><th></th></tr></thead>
+    <tbody>
+    {% for s in saved %}
+      <tr><td><b class="small">{{ s.name }}</b></td>
+        <td class="tiny muted">{{ s.query_text[:110] }}</td>
+        <td class="num tiny muted">{{ s.created_at|since }}</td>
+        <td class="num"><a class="btn btn-ghost btn-sm" href="{{ url_for('search', q=s.query_text) }}">Run</a></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div></div>
+{% endif %}
+{% endblock %}

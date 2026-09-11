@@ -1,0 +1,87 @@
+# Render blueprint for Royal Grind.
+#
+# Deploy: push this repo to GitHub, then in Render choose New → Blueprint and
+# point it at the repo. Render reads this file, creates the web service and the
+# Postgres instance, and wires DATABASE_URL between them.
+#
+# Values you must set by hand in the Render dashboard after the first deploy
+# (marked sync:false, so they are never read from the repo):
+#   SECRET_KEY                — python3 -c "import secrets; print(secrets.token_hex(32))"
+#   ANTHROPIC_API_KEY         — optional; without it the offline engine runs
+#   TELEPHONY_WEBHOOK_SECRET  — required before switching the phone on
+#   VONAGE_*                  — required before switching the phone on
+#
+# The database is NOT seeded automatically. Seeding would create the demo
+# brokerage, with a published password, on your production database. Real
+# tenants come from /signup. To create the schema on first deploy, open a Render
+# shell and run:
+#     python3 -c "from grind_db import create_tables; create_tables()"
+
+databases:
+  # Royal Grind gets its own database, deliberately. QuotaOS and CarrierGuard in
+  # this same repo also define a `users` table, so pointing two apps at one
+  # instance would have them fighting over it. Deploy each blueprint separately
+  # and never hand-edit DATABASE_URL to share — the isolation is only as good as
+  # that discipline.
+  - name: royalgrind-db
+    databaseName: royalgrind
+    plan: basic-256mb          # ~$7/mo. Raise before you have real load.
+    postgresMajorVersion: "17"
+
+services:
+  - type: web
+    name: royalgrind
+    runtime: python
+    plan: starter              # ~$7/mo
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    # 4 workers on the starter plan's shared CPU. The model endpoints are
+    # IO-bound waiting on the API, so workers are cheap; revisit if memory
+    # gets tight. The 120s timeout covers a slow research call.
+    startCommand: gunicorn --workers 4 --timeout 120 --bind 0.0.0.0:$PORT --access-logfile - --error-logfile - app:app
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: royalgrind-db
+          property: connectionString
+      - key: GRIND_ENV
+        value: production
+      - key: GRIND_DEBUG
+        value: "0"
+      - key: SESSION_COOKIE_SECURE
+        value: "1"
+      - key: SESSION_HOURS
+        value: "12"
+      - key: AI_CALLS_PER_HOUR
+        value: "120"
+      - key: AI_SEARCH_MAX_COMPANIES
+        value: "80"
+      - key: VERIFICATION_TTL_DAYS
+        value: "90"
+      - key: RETENTION_DAYS
+        value: "730"
+      # Starts in simulation. Switch to `vonage` only after the four Vonage
+      # values below are set and you have read the compliance section of
+      # DEPLOY.md — this flag is what turns a demo into a system that calls
+      # real people.
+      - key: TELEPHONY_PROVIDER
+        value: simulated
+      - key: ENRICHMENT_PROVIDER
+        value: offline
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: SECRET_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TELEPHONY_WEBHOOK_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: VONAGE_APPLICATION_ID
+        sync: false
+      - key: VONAGE_PRIVATE_KEY
+        sync: false
+      - key: VONAGE_NUMBER
+        sync: false

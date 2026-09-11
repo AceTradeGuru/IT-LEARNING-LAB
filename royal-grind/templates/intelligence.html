@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Signal performance{% endblock %}
+{% block crumb %}Signal performance{% endblock %}
+{% block content %}
+
+<h1>What actually converts</h1>
+<p class="sub">
+  Every call is attributed back to the signals that put the prospect on the list. After
+  enough volume, this page stops being an opinion about which buying signals matter and
+  starts being a measurement of it — for your list, your reps, your market. It is the
+  one asset here that cannot be licensed from anybody.
+</p>
+
+{% if total_attempts < 40 %}
+  <div class="warnbox">
+    <b>Not enough data yet — {{ total_attempts }} attributed call{{ 's' if total_attempts != 1 }}.</b>
+    Weights stay at 1.00 until roughly {{ shrink }} attempts per signal, so the scoring
+    engine is running purely on its priors. That is the correct behavior on day one; a
+    system that claimed to have learned something from nine calls would be worse than
+    one that admits it hasn't.
+  </div>
+{% endif %}
+
+<div class="grid g4" style="margin-bottom:1.2rem">
+  <div class="kpi">
+    <div class="lbl">Attributed calls</div>
+    <div class="num">{{ total_attempts }}</div>
+    <div class="note">Each call credits every signal that was live on the record</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Best signal</div>
+    <div class="num sm">{{ best.label if best else '—' }}</div>
+    <div class="note">{{ '%.2fx'|format(best.lift) if best else 'not enough data' }} the average
+      {% if best %}· {{ best.meeting_rate|pct(1) }} of dials book a meeting{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Weakest signal</div>
+    <div class="num sm">{{ worst.label if worst else '—' }}</div>
+    <div class="note">{{ '%.2fx'|format(worst.lift) if worst else 'not enough data' }} the average
+      {% if worst %}· scored down by {{ ((1 - worst.weight) * 100)|round|int }}%{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Signals measured</div>
+    <div class="num">{{ rows|selectattr('confident')|list|length }}<span class="faint" style="font-size:.9rem;font-weight:600">/{{ rows|length }}</span></div>
+    <div class="note">With enough volume to be worth reading</div>
+  </div>
+</div>
+
+<div class="card pad0">
+  <div class="cardhead">
+    <h2>Signal performance</h2>
+    <div class="spacer"></div>
+    <span class="tiny muted">Weight is what the scoring engine currently multiplies this signal's points by</span>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr>
+      <th>Signal</th><th class="num">Dials</th><th class="num">Reached</th>
+      <th class="num">Meetings</th><th class="num">Deals</th><th class="num">Won</th>
+      <th class="num">Lift</th><th class="num">Weight</th><th>Reading</th>
+    </tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><b>{{ r.label }}</b>
+          <div class="tiny faint mono">{{ r.key }} · base {{ r.base_points }} pts</div></td>
+        <td class="num">{{ r.attempts }}</td>
+        <td class="num">{{ r.connect_rate|pct }}</td>
+        <td class="num"><b>{{ r.meeting_rate|pct(1) }}</b></td>
+        <td class="num">{{ r.opportunities }}</td>
+        <td class="num">{{ r.won }}{% if r.dollars %}<div class="tiny faint">{{ r.dollars|money }}</div>{% endif %}</td>
+        <td class="num"><span class="{{ 'score good' if r.lift > 1.1 else 'score bad' if r.lift < 0.9 else '' }}">{{ '%.2f'|format(r.lift) }}x</span></td>
+        <td class="num"><b>{{ '%.2f'|format(r.weight) }}</b></td>
+        <td>
+          {% if not r.confident %}
+            <span class="badge neutral">too few to judge</span>
+          {% elif r.weight >= 1.15 %}
+            <span class="badge good">scored up</span>
+          {% elif r.weight <= 0.85 %}
+            <span class="badge bad">scored down</span>
+          {% else %}
+            <span class="badge neutral">at par</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="empty">No calls attributed yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+<div class="notebox" style="margin-bottom:1.5rem">
+  <b>How the weight is computed, and why it moves slowly.</b>
+  A signal's value per attempt is measured against the org-wide average, then shrunk
+  toward 1.00 in proportion to sample size — at {{ shrink }} attempts the evidence and the
+  prior get equal say. It is then clamped to the range 0.55–1.60. The clamp matters: the
+  sample was drawn by a scoring function that already favored high-scoring signals, so an
+  uncapped loop would score a lucky signal up, call it more, collect more outcomes for it,
+  and score it up again. That is a feedback loop, not learning.
+</div>
+
+<div class="grid split">
+  <div>
+    <h2>Does data quality pay for itself?</h2>
+    <p class="sub">Outcomes grouped by how much the platform trusted the number before it
+      was dialed. This is the argument for a data budget, in your own numbers.</p>
+    <div class="card pad0">
+      <div class="tablewrap"><table>
+        <thead><tr><th>Number was</th><th class="num">Dials</th><th class="num">Reached</th>
+          <th class="num">Meetings</th><th class="num">Meetings per 100 dials</th></tr></thead>
+        <tbody>
+        {% for s in by_status %}
+          <tr>
+            <td><span class="prov {{ s.status }}">{{ s.status.replace('_',' ') }}</span></td>
+            <td class="num">{{ s.attempts }}</td>
+            <td class="num">{{ (s.connects / s.attempts)|pct }}</td>
+            <td class="num">{{ s.meetings }}</td>
+            <td class="num"><b>{{ '%.1f'|format(s.meetings / s.attempts * 100) }}</b></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="empty">No dials matched to a stored number yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div>
+    <h2>By rep</h2>
+    <div class="card pad0">
+      <div class="tablewrap"><table>
+        <thead><tr><th>Rep</th><th class="num">Dials</th><th class="num">Reached</th><th class="num">Meetings</th></tr></thead>
+        <tbody>
+        {% for r in reps %}
+          <tr>
+            <td class="small">{{ r.name }}</td>
+            <td class="num">{{ r.calls }}</td>
+            <td class="num">{{ (r.connects / r.calls)|pct if r.calls else '—' }}</td>
+            <td class="num"><b>{{ r.meetings }}</b></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+
+    {% if hours %}
+      {% set best_h = hours|sort(attribute='rate')|last %}
+      <h2>Best hours</h2>
+      <div class="card">
+        <div class="hourchart">
+          {% for h in hours %}
+            <div class="h {{ 'best' if h.hour == best_h.hour }}" title="{{ h.connects }}/{{ h.attempts }} — {{ h.rate|pct }}">
+              <i style="height:{{ (h.rate / (best_h.rate or 1) * 100)|round|int }}%"></i>
+              <span>{{ h.hour if h.hour < 13 else h.hour - 12 }}{{ 'a' if h.hour < 12 else 'p' }}</span>
+            </div>
+          {% endfor %}
+        </div>
+        <p class="tiny muted" style="margin-top:.6rem">
+          Connect rate by hour across the whole org. Hours with fewer than five
+          attempts are omitted rather than drawn as zero.
+        </p>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

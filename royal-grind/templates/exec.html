@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Executive view{% endblock %}
+{% block crumb %}Executive view{% endblock %}
+{% block content %}
+
+<div class="row" style="justify-content:space-between;align-items:flex-end">
+  <div>
+    <h1>The last {{ days }} days</h1>
+    <p class="sub" style="margin-bottom:.6rem">
+      What the floor produced, what it cost, and where the pipeline came from.
+    </p>
+  </div>
+  <div class="pill-nav">
+    {% for d in [30, 90, 180, 365] %}
+      <a href="{{ url_for('exec_view', days=d) }}" class="{{ 'on' if days == d }}">{{ d }}d</a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid g4" style="margin-bottom:1rem">
+  <div class="kpi">
+    <div class="lbl">Open pipeline</div>
+    <div class="num">{{ open_value|money }}</div>
+    <div class="note">{{ '%.1fx'|format(coverage) }} coverage against {{ quota|money }} of quarterly quota across the floor</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Closed won</div>
+    <div class="num">{{ won_value|money }}</div>
+    <div class="note">{{ won_n }} won, {{ lost_n }} lost — {{ win_rate|pct }} win rate</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Meetings booked</div>
+    <div class="num">{{ calls.meetings or 0 }}</div>
+    <div class="note">from {{ calls.n or 0 }} dials —
+      {{ ((calls.meetings or 0) / (calls.n or 1))|pct(1) }} of dials,
+      {{ ((calls.meetings or 0) / (calls.connects or 1))|pct }} of conversations</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Hours per meeting</div>
+    <div class="num">{{ '%.1f'|format(hours_per_meeting) }}</div>
+    <div class="note">{{ '%.0f'|format(rep_hours) }} rep-hours on the phone, estimated at
+      talk time plus two minutes a dial</div>
+  </div>
+</div>
+
+<div class="grid split">
+  <div>
+    <h2>Where the pipeline came from</h2>
+    <p class="sub">Deals attributed to the buying signal that first surfaced the account.
+      This is the answer to "is the intelligence layer doing anything, or are we just
+      dialing faster".</p>
+    <div class="card">
+      {% if top_signals %}
+        <div class="bars">
+          {% set top = top_signals[0].lift %}
+          {% for s in top_signals %}
+            <div class="barrow">
+              <div class="bl">{{ s.label }}</div>
+              <div class="bb"><i style="width:{{ (s.lift / (top or 1) * 100)|round|int }}%"></i></div>
+              <div class="bv">{{ '%.2f'|format(s.lift) }}x</div>
+            </div>
+          {% endfor %}
+        </div>
+        <p class="tiny muted" style="margin-top:.8rem">
+          Lift against the average outcome per dial, for signals with enough volume to
+          read. Full working on <a href="{{ url_for('intelligence') }}">Signal performance</a>.
+        </p>
+      {% else %}
+        <p class="muted">Not enough attributed calls yet to say which signals are working.</p>
+      {% endif %}
+    </div>
+
+    <h2>The floor</h2>
+    <p class="sub">Won and quota are both scaled to the {{ days }}-day window on screen,
+      so attainment compares like with like.</p>
+    <div class="card pad0">
+      <div class="tablewrap"><table>
+        <thead><tr><th>Rep</th><th>Territory</th><th class="num">Dials</th>
+          <th class="num">Meetings</th><th class="num">Pipeline</th><th class="num">Won</th>
+          <th class="num">Quota</th><th>Attainment</th></tr></thead>
+        <tbody>
+        {% for r in reps %}
+          <tr>
+            <td><div class="person"><span class="avatar">{{ r.name|initials }}</span>
+              <span class="nm">{{ r.name }}</span></div></td>
+            <td class="tiny muted">{{ r.territory or '—' }}</td>
+            <td class="num">{{ r.calls }}</td>
+            <td class="num"><b>{{ r.meetings }}</b></td>
+            <td class="num">{{ r.pipeline|money }}</td>
+            <td class="num">{{ r.won|money }}</td>
+            <td class="num tiny muted">{{ (r.quota_quarter * quota_factor)|money }}</td>
+            <td style="min-width:110px">
+              {# Quota on a seat is quarterly; scale it to the window on screen
+                 so a 30-day view does not read as everybody missing. #}
+              {% set scaled = r.quota_quarter * quota_factor %}
+              {% set att = (r.won / scaled) if scaled else 0 %}
+              <div class="track"><i class="{{ 'good' if att >= 0.8 else 'warm' if att >= 0.5 else 'bad' }}"
+                   style="width:{{ [ (att * 100)|round|int, 100 ]|min }}%"></i></div>
+              <div class="tiny muted">{{ att|pct }}</div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>What it costs</h3>
+      <div class="row" style="justify-content:space-between;padding:.45rem 0;border-bottom:1px solid var(--line2)">
+        <span class="small">Model spend this month</span><b>${{ '%.2f'|format(spend / 100) }}</b>
+      </div>
+      <div class="row" style="justify-content:space-between;padding:.45rem 0;border-bottom:1px solid var(--line2)">
+        <span class="small">Per meeting booked</span>
+        <b>${{ '%.2f'|format(spend / 100 / (calls.meetings or 1)) }}</b>
+      </div>
+      <div class="row" style="justify-content:space-between;padding:.45rem 0">
+        <span class="small">Rep hours on the phone</span><b>{{ '%.0f'|format(rep_hours) }}</b>
+      </div>
+      <p class="tiny faint" style="margin-top:.6rem">
+        Model spend is metered from actual token usage. Rep time is estimated and is by
+        far the larger number — the platform does not know your fully-loaded cost per
+        rep, so it does not pretend to compute a cost per meeting in dollars.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Data exposure</h3>
+      <div class="row" style="justify-content:space-between;padding:.45rem 0;border-bottom:1px solid var(--line2)">
+        <span class="small">Contacts reachable</span>
+        <b>{{ quality.reachable_pct }}%</b>
+      </div>
+      <div class="row" style="justify-content:space-between;padding:.45rem 0;border-bottom:1px solid var(--line2)">
+        <span class="small">Records that will not connect</span>
+        <b class="score bad">{{ quality.dead_records }}</b>
+      </div>
+      <div class="row" style="justify-content:space-between;padding:.45rem 0;border-bottom:1px solid var(--line2)">
+        <span class="small">Verifications expired</span>
+        <b>{{ quality.stale_verifications }}</b>
+      </div>
+      <div class="row" style="justify-content:space-between;padding:.45rem 0">
+        <span class="small">Contacts who have left</span>
+        <b>{{ quality.departed }}</b>
+      </div>
+      <p class="tiny faint" style="margin-top:.6rem">
+        Roughly {{ quality.wasted_hours }} rep-hours will be spent this quarter dialing
+        records that cannot reach anybody.
+        <a href="{{ url_for('data_quality') }}">Fix the worst of them →</a>
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Pipeline sourced by the platform</h3>
+      <div class="num" style="font-size:1.6rem;font-weight:800;letter-spacing:-.8px">{{ sourced.v|money }}</div>
+      <p class="tiny muted">{{ sourced.n }} deal{{ 's' if sourced.n != 1 }} in the last {{ days }} days
+        that trace back to a buying signal this platform surfaced, rather than to a list
+        somebody bought.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

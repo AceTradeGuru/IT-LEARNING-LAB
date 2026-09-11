@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}My work{% endblock %}
+{% block crumb %}My work{% endblock %}
+{% block content %}
+
+<h1>{{ tasks|length }} open, {{ overdue }} overdue</h1>
+<p class="sub">Everything owed that isn't a dial — commitments made on calls, steps the
+  cadences have materialized, and follow-ups the debriefs scheduled.</p>
+
+<div class="grid split">
+  <div>
+    <div class="card pad0">
+      <div class="cardhead"><h2>Tasks</h2><div class="spacer"></div>
+        {% if overdue %}<span class="badge bad">{{ overdue }} overdue</span>{% endif %}</div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Due</th><th>What</th><th>Where</th><th>From</th><th></th></tr></thead>
+        <tbody>
+        {% for t in tasks %}
+          <tr>
+            <td class="nowrap">
+              {% if t.due_at < today.isoformat() %}<span class="badge bad">{{ t.due_at|nicedate }}</span>
+              {% elif t.due_at == today.isoformat() %}<span class="badge warm">today</span>
+              {% else %}<span class="tiny muted">{{ t.due_at|nicedate }}</span>{% endif %}
+            </td>
+            <td><b class="small">{{ t.title }}</b>
+              {% if t.detail %}<div class="tiny muted">{{ t.detail[:140] }}</div>{% endif %}</td>
+            <td class="tiny"><a href="{{ url_for('prospect', target_id=t.target_id) }}">{{ t.company_name }}</a>
+              <div class="faint">{{ t.contact_name or '—' }}</div></td>
+            <td><span class="badge neutral">{{ t.created_by }}</span></td>
+            <td class="num nowrap">
+              <a class="btn btn-ghost btn-sm" href="{{ url_for('prospect', target_id=t.target_id) }}">Open</a>
+              <form method="post" action="{{ url_for('task_done', task_id=t.id) }}" class="inline">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="back" value="{{ url_for('work') }}">
+                <button class="btn btn-green btn-sm">Done</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="empty">Nothing owed. Go to
+            <a href="{{ url_for('today') }}">today's list</a>.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div>
+    <h2 style="margin-top:0">Drafts waiting on you — {{ drafts|length }}</h2>
+    <p class="sub">Written by the debrief or by a cadence step. Nothing sends itself.</p>
+    {% for e in drafts %}
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:.4rem">
+          <a class="small" href="{{ url_for('prospect', target_id=e.target_id) }}"><b>{{ e.company_name }}</b></a>
+          <span class="badge {{ 'good' if e.engine == 'claude' else 'neutral' }}">{{ e.engine or 'manual' }}</span>
+        </div>
+        <form method="post" action="{{ url_for('email_action', email_id=e.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="back" value="{{ url_for('work') }}">
+          <input name="subject" value="{{ e.subject }}">
+          <textarea name="body" style="min-height:130px;margin-top:.4rem">{{ e.body }}</textarea>
+          <div class="tiny faint" style="margin-top:.3rem">
+            to {{ e.to_address or 'no verified address on this record' }}</div>
+          <div class="row" style="margin-top:.5rem">
+            <button class="btn btn-primary btn-sm" name="action" value="send"
+              {{ 'disabled' if not e.to_address }}>Send</button>
+            <button class="btn btn-ghost btn-sm" name="action" value="save">Save</button>
+            <button class="btn btn-red btn-sm" name="action" value="discard">Discard</button>
+          </div>
+        </form>
+      </div>
+    {% else %}
+      <div class="card"><p class="muted tiny">No drafts.</p></div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

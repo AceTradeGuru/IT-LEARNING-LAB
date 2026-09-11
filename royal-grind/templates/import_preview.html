@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}Import preview{% endblock %}
+{% block crumb %}<a href="{{ url_for('data_import') }}">Import</a> / {{ imp.filename }}{% endblock %}
+{% block content %}
+
+<div class="row" style="justify-content:space-between;align-items:flex-end">
+  <div>
+    <h1>{{ imp.filename }}</h1>
+    <p class="sub" style="margin-bottom:.6rem">
+      Read as a <b>{{ plan.source_label }}</b> export — {{ plan.total_rows }} data
+      row{{ 's' if plan.total_rows != 1 }}, {{ headers|length }} columns.
+      {% if imp.status == 'preview' %}Nothing has been written.{% endif %}
+    </p>
+  </div>
+  <div class="row tight" style="margin-bottom:1rem">
+    <span class="badge {{ 'good' if imp.status == 'applied' else 'warm' if imp.status == 'preview' else 'neutral' }}">{{ imp.status }}</span>
+  </div>
+</div>
+
+{% if imp.status == 'applied' and report %}
+  <div class="okbox">
+    <b>Applied {{ imp.applied_at|since }}.</b>
+    Created {{ report.created.companies }} compan{{ 'y' if report.created.companies == 1 else 'ies' }},
+    {{ report.created.contacts }} contact{{ 's' if report.created.contacts != 1 }},
+    {{ report.created.points }} contact point{{ 's' if report.created.points != 1 }} and
+    {{ report.created.targets }} target{{ 's' if report.created.targets != 1 }}.
+    Filled blanks on {{ report.updated.companies }} existing compan{{ 'y' if report.updated.companies == 1 else 'ies' }}
+    and {{ report.updated.contacts }} contact{{ 's' if report.updated.contacts != 1 }}.
+  </div>
+{% endif %}
+
+<div class="grid g5" style="margin-bottom:1.2rem">
+  <div class="kpi"><div class="lbl">New contacts</div>
+    <div class="num">{{ plan.counts.contacts_new }}</div>
+    <div class="note">at {{ plan.counts.companies_new }} new compan{{ 'y' if plan.counts.companies_new == 1 else 'ies' }}</div></div>
+  <div class="kpi"><div class="lbl">Updates</div>
+    <div class="num">{{ plan.counts.contacts_update }}</div>
+    <div class="note">Already here — blanks filled, nothing overwritten</div></div>
+  <div class="kpi"><div class="lbl">Numbers &amp; emails</div>
+    <div class="num">{{ plan.counts.points }}</div>
+    <div class="note">Each with its source and how much we trust it</div></div>
+  <div class="kpi"><div class="lbl">Skipped</div>
+    <div class="num" style="{{ 'color:var(--bad)' if plan.counts.skipped }}">{{ plan.counts.skipped }}</div>
+    <div class="note">With a reason on every one</div></div>
+  <div class="kpi"><div class="lbl">Suppressed</div>
+    <div class="num" style="{{ 'color:var(--bad)' if plan.counts.suppressed }}">{{ plan.counts.suppressed }}</div>
+    <div class="note">On your do-not-contact list</div></div>
+</div>
+
+{% if plan.trust_vendor %}
+  <div class="warnbox">
+    <b>Vendor verification is being accepted at face value.</b>
+    Addresses {{ plan.source_label }} marked verified will land as
+    <span class="prov verified">verified</span> with today's date, attributed to them
+    in the method line. A rep will not be able to tell those apart from a number you
+    dialed yourself. Go back and untick the box if that was not deliberate.
+  </div>
+{% else %}
+  <div class="notebox" style="margin-bottom:1rem">
+    <b>Vendor verification is not being taken at face value.</b>
+    Everything lands as <span class="prov probable">probable</span> or worse, with
+    {{ plan.source_label }}'s own wording preserved in the method line. Your first
+    connect on each number promotes it to <span class="prov verified">verified</span>
+    for real. This is the default and the recommendation.
+  </div>
+{% endif %}
+
+{% if plan.suppressed %}
+  <div class="block">
+    <h3>{{ plan.suppressed|length }} row{{ 's' if plan.suppressed|length != 1 }} hit the suppression list</h3>
+    <p class="tiny" style="color:#7f1d1d">These still import — the company is real —
+      but the matching numbers and addresses are written
+      <span class="prov invalid">invalid</span> with the reason, so they can never
+      reach a call list.</p>
+    <ul>
+      {% for s in plan.suppressed[:12] %}
+        <li>Line {{ s.line }}: {{ s.name }} at {{ s.company }} —
+          {{ s.kinds|join(', ')|replace('_', ' ') }}</li>
+      {% endfor %}
+      {% if plan.suppressed|length > 12 %}<li>… and {{ plan.suppressed|length - 12 }} more</li>{% endif %}
+    </ul>
+  </div>
+{% endif %}
+
+{% if imp.status == 'preview' %}
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div>
+        <h3 style="margin:0">Apply this import?</h3>
+        <p class="tiny muted" style="margin-top:.2rem">
+          It re-reads the file at apply time, so what lands reflects the database as
+          it is now — not as it was when this preview was generated.
+        </p>
+      </div>
+      <div class="row tight">
+        <form method="post" action="{{ url_for('import_apply', import_id=imp.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-primary">Apply — write {{ plan.counts.contacts_new + plan.counts.contacts_update }} rows</button>
+        </form>
+        <form method="post" action="{{ url_for('import_discard', import_id=imp.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-red">Discard</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+<div class="grid split">
+  <div>
+    <h2>What lands — first {{ [plan.creates|length, 25]|min }} new rows</h2>
+    <div class="card pad0"><div class="tablewrap"><table>
+      <thead><tr><th class="num">Line</th><th>Contact</th><th>Company</th>
+        <th>Where</th><th>Reachable on</th><th>Rep</th></tr></thead>
+      <tbody>
+      {% for e in plan.creates[:25] %}
+        <tr>
+          <td class="num tiny muted">{{ e.line }}</td>
+          <td><b class="small">{{ e.row.name }}</b>
+            <div class="tiny faint">{{ e.row.title or 'no title' }}</div></td>
+          <td class="small">{{ e.row.company }}
+            {% if not e.company_exists %}<span class="badge good">new</span>{% endif %}</td>
+          <td class="tiny muted nowrap">{{ e.row.city }}{{ ', ' if e.row.city and e.row.state }}{{ e.row.state }}</td>
+          <td>
+            <div class="row tight">
+              {% for p in e.points %}
+                <span class="prov {{ p.status }}" title="{{ p.method }}">{{ p.value }}</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td class="tiny muted">{{ rep_names.get(e.rep_id, '—') }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">No new rows in this file.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div></div>
+
+    {% if plan.updates %}
+      <h2>Already here — {{ plan.updates|length }}</h2>
+      <p class="sub">These match an existing contact. Empty fields get filled; nothing
+        that already has a value is touched.</p>
+      <div class="card pad0"><div class="tablewrap"><table>
+        <thead><tr><th class="num">Line</th><th>Contact</th><th>Company</th><th>Adds</th></tr></thead>
+        <tbody>
+        {% for e in plan.updates[:20] %}
+          <tr>
+            <td class="num tiny muted">{{ e.line }}</td>
+            <td class="small">{{ e.row.name }}</td>
+            <td class="tiny muted">{{ e.row.company }}</td>
+            <td>
+              <div class="row tight">
+                {% for p in e.points %}<span class="prov {{ p.status }}">{{ p.kind|replace('_',' ') }}</span>{% endfor %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div></div>
+    {% endif %}
+
+    {% if plan.skips %}
+      <h2>Skipped — {{ plan.skips|length }}</h2>
+      <p class="sub">Every one with the reason. A row is skipped when there is no
+        company, no person, or nothing to reach them on — importing it would create a
+        record a rep cannot act on.</p>
+      <div class="card pad0"><div class="tablewrap"><table>
+        <thead><tr><th class="num">Line</th><th>Company</th><th>Contact</th><th>Why</th></tr></thead>
+        <tbody>
+        {% for s in plan.skips[:40] %}
+          <tr>
+            <td class="num tiny muted">{{ s.line }}</td>
+            <td class="tiny">{{ s.company or '—' }}</td>
+            <td class="tiny">{{ s.name or '—' }}</td>
+            <td class="tiny" style="color:var(--bad)">{{ s.problems|join('; ') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div></div>
+    {% endif %}
+  </div>
+
+  <div>
+    {% if plan.new_companies %}
+      <div class="card">
+        <h3>New companies — {{ plan.new_companies|length }}</h3>
+        <div class="tiny muted" style="max-height:16rem;overflow-y:auto;margin-top:.4rem">
+          {% for c in plan.new_companies %}<div>{{ c }}</div>{% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% if plan.states %}
+      <div class="card">
+        <h3>Where they are</h3>
+        <div class="bars" style="margin-top:.5rem">
+          {% set top = plan.states.values()|list|first %}
+          {% for state, n in plan.states.items() %}
+            {% if loop.index <= 10 %}
+              <div class="barrow">
+                <div class="bl" style="width:44px;flex:0 0 44px">{{ state }}</div>
+                <div class="bb"><i style="width:{{ (n / top * 100)|round|int }}%"></i></div>
+                <div class="bv">{{ n }}</div>
+              </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <p class="tiny faint" style="margin-top:.5rem">
+          State decides the timezone the dial gate uses, so a row with no state gets
+          Central and the gate flags it rather than assuming.
+        </p>
+      </div>
+    {% endif %}
+
+    {% if plan.duplicates %}
+      <div class="card">
+        <h3>Duplicates within the file — {{ plan.duplicates|length }}</h3>
+        <p class="tiny muted">Vendor exports routinely repeat a contact once per matched
+          account. Only the first occurrence is imported.</p>
+        <div class="tiny muted" style="max-height:12rem;overflow-y:auto;margin-top:.4rem">
+          {% for d in plan.duplicates[:30] %}
+            <div>Line {{ d.line }}: {{ d.name }} — first seen on line {{ d.first_seen }}</div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% if plan.unmatched_owners %}
+      <div class="card">
+        <h3>Owners we don't recognize</h3>
+        <p class="tiny muted">These rows name an owner who is not a rep here. They fall
+          back to the territory covering the state, or to the rep you chose.</p>
+        <div class="tiny" style="margin-top:.4rem">
+          {% for owner, n in plan.unmatched_owners.items() %}
+            <div>{{ owner }} — {{ n }} row{{ 's' if n != 1 }}</div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <h3>Columns it found</h3>
+      <div class="tiny muted mono" style="max-height:16rem;overflow-y:auto;line-height:1.7">
+        {% for h in headers %}<div>{{ h }}</div>{% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

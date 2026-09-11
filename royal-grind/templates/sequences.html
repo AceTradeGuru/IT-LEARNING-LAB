@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Sequences{% endblock %}
+{% block crumb %}Sequences{% endblock %}
+{% block content %}
+
+<div class="row" style="justify-content:space-between;align-items:flex-end">
+  <div>
+    <h1>Cadences</h1>
+    <p class="sub" style="margin-bottom:.6rem">
+      A prospect who does not answer is the majority of the list, and the majority is
+      where the money is. Steps become real rows — a task, a draft — never a silent rule.
+    </p>
+  </div>
+  {% if has_role('manager') %}
+    <form method="post" action="{{ url_for('sequences_run') }}" style="margin-bottom:1rem">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button class="btn btn-ghost">Run due steps ({{ due|length }})</button>
+    </form>
+  {% endif %}
+</div>
+
+<div class="notebox" style="margin-bottom:1.2rem">
+  <b>A reply ends the sequence.</b> The moment somebody connects, books, or asks to be
+  left alone, every cadence they are in exits and the open tasks it created are
+  cancelled. Automation that keeps firing after a human conversation started is how a
+  domain gets blocked and a brand gets a reputation. An exit is therefore a success
+  metric here, not a failure one.
+</div>
+
+{% for s in rows %}
+  <div class="card">
+    <div class="cardhead" style="padding:0 0 .7rem;border-bottom:1px solid var(--line2);margin:-.1rem 0 .9rem">
+      <h2 style="margin:0">{{ s.name }}</h2>
+      {% if s.entry_trigger %}<span class="badge brand">auto-enrolls on {{ s.entry_trigger }}</span>{% endif %}
+      <span class="badge {{ 'good' if s.active else 'neutral' }}">{{ 'on' if s.active else 'off' }}</span>
+      <div class="spacer"></div>
+      <span class="badge neutral">{{ s.active_count }} active</span>
+      <span class="badge neutral">{{ s.completed_count }} ran out</span>
+      <span class="badge good">{{ s.exited_count }} replied</span>
+    </div>
+    <p class="muted" style="margin-bottom:.9rem">{{ s.description }}</p>
+
+    <div class="tablewrap"><table>
+      <thead><tr><th class="num">Step</th><th>Day</th><th>Channel</th><th>What</th><th>Guidance</th></tr></thead>
+      <tbody>
+      {% for st in steps.get(s.id, []) %}
+        <tr>
+          <td class="num">{{ st.step_no }}</td>
+          <td class="nowrap tiny muted">{{ 'same day' if st.day_offset == 0 else '+' ~ st.day_offset ~ ' business days' }}</td>
+          <td><span class="badge neutral">{{ st.channel }}</span></td>
+          <td><b class="small">{{ st.title }}</b></td>
+          <td class="tiny muted">{{ st.guidance }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+{% endfor %}
+
+{% if due %}
+  <h2>Due now — {{ due|length }}</h2>
+  <div class="card pad0"><div class="tablewrap"><table>
+    <thead><tr><th>Sequence</th><th class="num">Step</th><th>Due</th><th></th></tr></thead>
+    <tbody>
+    {% for d in due[:40] %}
+      <tr>
+        <td class="small">{{ d.sequence_name }}</td>
+        <td class="num">{{ d.step_no + 1 }}</td>
+        <td class="tiny muted">{{ d.next_due_at|nicedate }}</td>
+        <td class="num"><a class="tiny" href="{{ url_for('prospect', target_id=d.target_id) }}">open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div></div>
+  <p class="tiny faint">In production this runs from cron:
+    <span class="mono">python3 sequences.py --run</span>. The button above does the same
+    thing by hand.</p>
+{% endif %}
+{% endblock %}

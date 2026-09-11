@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Pipeline{% endblock %}
+{% block crumb %}Pipeline{% endblock %}
+{% block content %}
+
+<h1>{{ open_value|money }} open</h1>
+<p class="sub">{{ open_deals|length }} live opportunit{{ 'y' if open_deals|length == 1 else 'ies' }},
+  {{ won_value|money }} closed won, {{ win_rate|pct }} win rate.</p>
+
+<div class="board">
+  {% for stage in DEAL_STAGES %}
+    <div class="col">
+      <h4><span>{{ DEAL_LABELS[stage] }}</span>
+        <span>{{ by_stage[stage]|length }}</span></h4>
+      {% for d in by_stage[stage][:20] %}
+        <a class="ticket" href="{{ url_for('prospect', target_id=d.target_id) if d.target_id else url_for('company_detail', company_id=d.company_id) }}">
+          <div class="tn">{{ d.company_name }}</div>
+          <div class="tm">{{ d.value_annual|money }}/yr
+            {% if d.loads_per_month %}· {{ d.loads_per_month }} loads/mo{% endif %}</div>
+          <div class="tm">{{ d.rep_name or 'unassigned' }} · {{ d.close_date|nicedate }}</div>
+        </a>
+      {% endfor %}
+      {% if by_stage[stage]|length > 20 %}
+        <div class="tiny faint" style="padding:.2rem .3rem">+{{ by_stage[stage]|length - 20 }} more</div>
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+
+{% if slipped %}
+  <h2>Close dates that have moved</h2>
+  <p class="sub">
+    The original forecast date is written once, on creation, and never touched again. No
+    CRM export contains it, because no CRM keeps it — which is why a deal pushed three
+    times looks healthy everywhere else.
+  </p>
+  <div class="card pad0"><div class="tablewrap"><table>
+    <thead><tr><th>Deal</th><th>Rep</th><th class="num">Value</th><th>First forecast</th>
+      <th>Now</th><th class="num">Slipped</th></tr></thead>
+    <tbody>
+    {% for s in slipped %}
+      <tr>
+        <td><b class="small">{{ s.deal.company_name }}</b>
+          <div class="tiny faint">{{ DEAL_LABELS.get(s.deal.stage, s.deal.stage) }} · {{ s.deal.next_step }}</div></td>
+        <td class="tiny muted">{{ s.deal.rep_name }}</td>
+        <td class="num">{{ s.deal.value_annual|money }}</td>
+        <td class="tiny muted">{{ s.deal.close_date_original|nicedate }}</td>
+        <td class="tiny">{{ s.deal.close_date|nicedate }}</td>
+        <td class="num"><span class="score bad">{{ s.days }}d</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div></div>
+{% endif %}
+
+<h2>Every deal</h2>
+<div class="card pad0"><div class="tablewrap"><table>
+  <thead><tr><th>Company</th><th>Rep</th><th>Stage</th><th class="num">Value</th>
+    <th>Close</th><th>Next step</th><th>From</th><th></th></tr></thead>
+  <tbody>
+  {% for d in deals[:120] %}
+    <tr>
+      <td><b class="small">{{ d.company_name }}</b>
+        <div class="tiny faint">{{ d.state }}</div></td>
+      <td class="tiny muted">{{ d.rep_name or '—' }}</td>
+      <td>
+        <form method="post" action="{{ url_for('deal_update', deal_id=d.id) }}" class="row tight">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <select name="stage" style="width:auto;font-size:.78rem;padding:.25rem .4rem">
+            {% for s in DEAL_STAGES %}
+              <option value="{{ s }}" {{ 'selected' if s == d.stage }}>{{ DEAL_LABELS[s] }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-ghost btn-sm">Set</button>
+        </form>
+      </td>
+      <td class="num">{{ d.value_annual|money }}</td>
+      <td class="tiny muted nowrap">{{ d.close_date|nicedate }}</td>
+      <td class="tiny">{{ d.next_step }}</td>
+      <td class="tiny">{% if d.origin_signal %}<span class="badge good">{{ d.origin_signal.replace('_',' ') }}</span>{% else %}<span class="faint">—</span>{% endif %}</td>
+      <td class="num">{% if d.target_id %}<a class="tiny" href="{{ url_for('prospect', target_id=d.target_id) }}">open</a>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div></div>
+{% endblock %}

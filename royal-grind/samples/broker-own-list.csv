@@ -1,0 +1,4 @@
+Company,Contact Name,Title,Phone,Email,State,City,Freight Modes,Loads/mo,Key Lanes,Current Carrier,Shipper Type,Docks
+Tarver Mill Supply,Jo Ann Hicks,Owner,918-555-0450,joann@tarvermill.example,OK,Muskogee,"flatbed, truckload",28,"Muskogee, OK -> Fort Smith, AR",a regional broker,distributor,3
+Ridgeline Components,Wes Dombrowski,Director of Logistics,(816) 555 0101,wes@ridgelinecomp.example,MO,Lee's Summit,"LTL and expedited",52,"Lee's Summit, MO -> Wichita, KS",TQL,manufacturer,6
+Bellamy Grain,Hector Salas,Traffic Manager,620-555-7788,hector@bellamygrain.example,KS,Hutchinson,truckload,96,,Echo Global,manufacturer,8

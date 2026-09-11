@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}Call — {{ row.company.name }}{% endblock %}
+{% block crumb %}
+  <a href="{{ url_for('today') }}">Today</a> /
+  <a href="{{ url_for('prospect', target_id=row.target.id) }}">{{ row.company.name }}</a> / Call
+{% endblock %}
+{% block content %}
+
+{% set logged = call.disposition and call.status == 'completed' and call.notes is not none and call.status != 'ringing' %}
+{% set resolved = call.disposition and call.status in ('completed','failed') %}
+
+<div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:1rem">
+  <div>
+    <h1>{{ row.contact.name if row.contact else row.company.name }}</h1>
+    <p class="muted">
+      {{ row.contact.title + ' · ' if row.contact else '' }}{{ row.company.name }} ·
+      <span class="mono">{{ call.to_number }}</span>
+    </p>
+  </div>
+  <div class="row tight">
+    <span class="badge {{ 'good' if resolved else 'warm' }}">{{ call.status }}</span>
+    {% if call.duration_sec %}<span class="badge neutral">{{ call.duration_sec|duration }}</span>{% endif %}
+    <span class="badge neutral">{{ call.provider }}</span>
+    {% if call.recorded %}<span class="badge bad">recording</span>{% endif %}
+  </div>
+</div>
+
+{% if call.provider == 'simulated' %}
+  <div class="warnbox">
+    <b>Simulated call.</b> No number was dialed. The outcome and transcript below were
+    produced by the call simulator from this record's data quality, the contact's role,
+    and the hour — see <span class="mono">telephony.py</span>. Set
+    <span class="mono">TELEPHONY_PROVIDER=vonage</span> to place real calls.
+  </div>
+{% endif %}
+
+<div class="notebox" style="margin-bottom:1rem">
+  <b>Recording:</b> {{ call.consent_basis or 'not recorded' }}
+</div>
+
+<div class="grid split-wide">
+  <!-- ============================================= the script, on the line == -->
+  <div>
+    <div class="card">
+      <div class="cardhead" style="padding:0 0 .7rem;border-bottom:1px solid var(--line2);margin:-.1rem 0 .8rem">
+        <h2 style="margin:0">Your plan</h2>
+        {% if row.target.plan_engine %}
+          <span class="badge {{ 'good' if row.target.plan_engine == 'claude' else 'neutral' }}">{{ row.target.plan_engine }}</span>
+        {% endif %}
+        <div class="spacer"></div>
+        <form method="post" action="{{ url_for('prospect_plan', target_id=row.target.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-ghost btn-sm">{{ 'Regenerate' if plan else 'Generate' }}</button>
+        </form>
+      </div>
+      {% if plan %}
+        {% include "_plan.html" %}
+      {% else %}
+        <p class="muted">No plan on this record. Generate one — it takes a few seconds and
+          it is the difference between a call and a cold call.</p>
+      {% endif %}
+    </div>
+
+    {% if call.transcript %}
+      <h2>Transcript</h2>
+      <div class="card"><div class="transcript">{{ call.transcript }}</div></div>
+    {% endif %}
+  </div>
+
+  <!-- ==================================================== log and debrief == -->
+  <div>
+    <div class="card">
+      <h2 style="margin-top:0">Log the call</h2>
+      <form method="post" action="{{ url_for('call_log', call_id=call.id) }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <label for="disposition">What happened</label>
+        <select id="disposition" name="disposition">
+          {% for value, label in DISPOSITIONS %}
+            <option value="{{ value }}" {{ 'selected' if value == call.disposition }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" placeholder="What they said, in their words. The debrief reads this too.">{{ call.notes or '' }}</textarea>
+        <label class="plain" style="margin-top:.7rem">
+          <input type="checkbox" name="analyze" value="1" checked>
+          Run the debrief — summarize, set the next action, draft the follow-up
+        </label>
+        <button class="btn btn-primary btn-block" style="margin-top:.8rem">Save and close out</button>
+      </form>
+      <p class="tiny faint" style="margin-top:.7rem">
+        Saving also: attributes the outcome to the signals that put this on your list,
+        updates whether the number is good, and starts or stops the cadence.
+      </p>
+    </div>
+
+    {% if analysis %}
+      <div class="card">
+        <div class="cardhead" style="padding:0 0 .7rem;border-bottom:1px solid var(--line2);margin:-.1rem 0 .8rem">
+          <h2 style="margin:0">Debrief</h2>
+          <span class="badge {{ 'good' if call.analysis_engine == 'claude' else 'neutral' }}">{{ call.analysis_engine }}</span>
+          <span class="badge {{ {'positive':'good','negative':'bad'}.get(analysis.sentiment, 'neutral') }}">{{ analysis.sentiment }}</span>
+        </div>
+        <p>{{ analysis.summary }}</p>
+
+        {% if analysis.pain_points %}
+          <h3 style="margin-top:1rem">What they said hurts</h3>
+          <ul style="margin-left:1.1rem;color:var(--muted)">
+            {% for p in analysis.pain_points %}<li>{{ p }}</li>{% endfor %}
+          </ul>
+        {% endif %}
+
+        {% if analysis.commitments %}
+          <h3 style="margin-top:1rem">Who owes what</h3>
+          {% for c in analysis.commitments %}
+            <div class="script" style="padding:.5rem .7rem">
+              <div class="q"><span class="badge {{ 'brand' if c.who == 'rep' else 'neutral' }}">{{ c.who }}</span>
+                {{ c.what }}</div>
+              <div class="a">{{ c.when }}</div>
+            </div>
+          {% endfor %}
+        {% endif %}
+
+        {% if analysis.volumes or analysis.incumbents %}
+          <div class="grid g2" style="margin-top:1rem">
+            {% if analysis.volumes %}
+              <div class="notebox"><div class="eyebrow">Volumes stated</div>
+                <ul style="margin:.3rem 0 0 1rem">{% for v in analysis.volumes %}<li>{{ v }}</li>{% endfor %}</ul></div>
+            {% endif %}
+            {% if analysis.incumbents %}
+              <div class="notebox"><div class="eyebrow">Who they use</div>
+                <ul style="margin:.3rem 0 0 1rem">{% for i in analysis.incumbents %}<li>{{ i }}</li>{% endfor %}</ul></div>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        <div class="okbox" style="margin-top:1rem">
+          <b>Next:</b> {{ analysis.next_action }}
+          <span class="faint">— scheduled {{ analysis.next_action_days }} business day{{ 's' if analysis.next_action_days != 1 }} out</span>
+        </div>
+
+        {% if analysis.data_corrections %}
+          <div class="warnbox">
+            <b>The call contradicted our record</b>
+            <ul style="margin:.3rem 0 0 1.1rem">
+              {% for d in analysis.data_corrections %}<li>{{ d }}</li>{% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+
+        {% if analysis.coaching %}
+          <div class="notebox" style="margin-top:.8rem">
+            <div class="eyebrow">For the one-to-one</div>
+            <p style="margin-top:.2rem;color:var(--text)">{{ analysis.coaching }}</p>
+          </div>
+        {% endif %}
+      </div>
+    {% elif resolved %}
+      <div class="card">
+        <h3>No debrief yet</h3>
+        <p class="muted tiny" style="margin-bottom:.7rem">
+          Run it to get the summary, the commitments, a dated next action and a drafted
+          follow-up email.
+        </p>
+        <form method="post" action="{{ url_for('call_analyze', call_id=call.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-ghost btn-sm">Run the debrief</button>
+        </form>
+      </div>
+    {% endif %}
+
+    {% if tasks %}
+      <div class="card">
+        <h3>Now on your list</h3>
+        {% for t in tasks %}
+          <div class="row" style="justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--line2)">
+            <div><b class="small">{{ t.title }}</b>
+              <div class="tiny faint">due {{ t.due_at|nicedate }} · created by {{ t.created_by }}</div></div>
+            <form method="post" action="{{ url_for('task_done', task_id=t.id) }}">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="back" value="{{ url_for('call_console', call_id=call.id) }}">
+              <button class="btn btn-ghost btn-sm">Done</button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% for e in emails if e.status == 'draft' %}
+      <div class="card">
+        <div class="cardhead" style="padding:0 0 .6rem;border-bottom:1px solid var(--line2);margin:-.1rem 0 .7rem">
+          <h3 style="margin:0">Follow-up, drafted</h3>
+          <span class="badge {{ 'good' if e.engine == 'claude' else 'neutral' }}">{{ e.engine }}</span>
+        </div>
+        <form method="post" action="{{ url_for('email_action', email_id=e.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="back" value="{{ url_for('call_console', call_id=call.id) }}">
+          <label for="s{{ e.id }}">To</label>
+          <input value="{{ e.to_address or 'no verified address on this record' }}" disabled>
+          <label for="s{{ e.id }}">Subject</label>
+          <input id="s{{ e.id }}" name="subject" value="{{ e.subject }}">
+          <label for="b{{ e.id }}">Body</label>
+          <textarea id="b{{ e.id }}" name="body" style="min-height:190px">{{ e.body }}</textarea>
+          <div class="row" style="margin-top:.7rem">
+            <button class="btn btn-primary btn-sm" name="action" value="send">Send</button>
+            <button class="btn btn-ghost btn-sm" name="action" value="save">Save draft</button>
+            <button class="btn btn-red btn-sm" name="action" value="discard">Discard</button>
+          </div>
+        </form>
+        <p class="tiny faint" style="margin-top:.6rem">
+          Nothing leaves the building automatically. "Send" marks it sent and logs it —
+          wiring an actual mail transport is a deliberate, separate decision. See DEPLOY.md.
+        </p>
+      </div>
+    {% endfor %}
+
+    <div class="card">
+      <h3>The record</h3>
+      <p class="tiny muted">Score was <b>{{ row.score }}</b> when this call was placed.</p>
+      {% if row.why_now %}
+        <div class="callcard" style="padding:.5rem 0;border:none">
+          <div class="main"><div class="why">{{ row.why_now.detail }}</div></div>
+        </div>
+      {% endif %}
+      <a class="btn btn-ghost btn-sm btn-block" style="margin-top:.5rem"
+         href="{{ url_for('prospect', target_id=row.target.id) }}">Open the full record</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

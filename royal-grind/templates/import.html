@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Import a list{% endblock %}
+{% block crumb %}Import a list{% endblock %}
+{% block content %}
+
+<h1>Import a prospect list</h1>
+<p class="sub">
+  A CSV from ZoomInfo, Apollo, Salesforce or HubSpot — or your own spreadsheet.
+  The header row is read to work out which platform it came from, so you are not
+  hand-mapping twenty columns. Nothing is written until you have seen the preview.
+</p>
+
+<div class="grid split">
+  <div>
+    <div class="card">
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <label for="file">CSV file</label>
+        <input id="file" name="file" type="file" accept=".csv,text/csv" required>
+
+        <label for="default_rep_id">Assign to</label>
+        <select id="default_rep_id" name="default_rep_id">
+          {% for r in reps %}
+            <option value="{{ r.id }}">{{ r.name }}{% if r.territory %} — {{ r.territory }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <p class="tiny faint">Only used as the fallback. A row with an owner column
+          goes to that rep; otherwise the rep whose territory covers the state wins.</p>
+
+        <label class="plain" style="margin-top:1rem">
+          <input type="checkbox" name="trust_vendor" value="1">
+          Accept the vendor's email verification at face value
+        </label>
+        <p class="tiny faint">
+          <b>Off by default, and that is the recommendation.</b> A vendor marking an
+          address “Verified” is their claim, on their date, by a method you cannot
+          inspect. Left off, it lands as <span class="prov probable">probable</span>
+          with their exact wording preserved, and your first connect promotes it to
+          <span class="prov verified">verified</span> for real. Turned on, their badge
+          becomes yours — and a rep can no longer tell the difference between a number
+          you dialed on Tuesday and one a list broker asserted.
+        </p>
+
+        <button class="btn btn-primary" style="margin-top:.8rem">Upload and preview</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>What it does with the columns</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Lands as</th><th>Read from</th></tr></thead>
+        <tbody>
+          <tr><td><b>Company</b></td><td class="tiny muted">name, website/domain, industry, NAICS, city, state, employees, revenue</td></tr>
+          <tr><td><b>Contact</b></td><td class="tiny muted">first/last or full name, job title, LinkedIn, start date</td></tr>
+          <tr><td><b>Numbers &amp; email</b></td><td class="tiny muted">direct dial, mobile, company/main line, email + the vendor's email status</td></tr>
+          <tr><td><b>Freight profile</b></td><td class="tiny muted">modes, loads per month, lanes, incumbents, docks — columns no CRM has and a broker's own list usually does</td></tr>
+          <tr><td><b>Assignment</b></td><td class="tiny muted">owner / owner email, else the territory covering the state</td></tr>
+        </tbody>
+      </table></div>
+      <p class="tiny faint" style="margin-top:.6rem">
+        Employees and revenue accept the shapes these exports really contain —
+        <span class="mono">$74M</span>, <span class="mono">74,000,000</span>,
+        <span class="mono">201-500</span> (midpoint),
+        <span class="mono">1,000+</span>, and ZoomInfo's “in 000s”. A cell it cannot
+        read stays empty rather than becoming zero: zero is a claim, and an
+        unreadable cell is not one we are entitled to make.
+      </p>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Three things it does that a loader doesn't</h3>
+      <div class="sig good" style="margin-top:.7rem">
+        <div>
+          <div class="lbl">It checks the suppression list first</div>
+          <div class="det">An import is the likeliest way a number somebody asked you
+            never to call again gets back in. Matching rows still import — the company
+            is still real — but the number is written
+            <span class="prov invalid">invalid</span> with the reason, so it can never
+            reach a call list.</div>
+        </div>
+      </div>
+      <div class="sig good">
+        <div>
+          <div class="lbl">It won't overwrite what a rep learned</div>
+          <div class="det">Re-importing fills blanks only. A rep who wrote “38 loads a
+            month” after asking the customer holds better data than a vendor's
+            estimate, and a second import must not quietly undo that.</div>
+        </div>
+      </div>
+      <div class="sig good">
+        <div>
+          <div class="lbl">Re-importing is the point, not a hazard</div>
+          <div class="det">Companies are keyed on the source's own record id, else
+            domain, else name + state; contacts on email, else name within the company.
+            The same file applied twice updates in place.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Recognized exports</h3>
+      <div class="row tight">
+        {% for key, label in sources.items() %}<span class="badge neutral">{{ label }}</span>{% endfor %}
+      </div>
+      <p class="tiny faint" style="margin-top:.5rem">
+        Anything unrecognized falls back to the union of all four, which handles a
+        renamed or reordered column. The preview always names which one it picked.
+      </p>
+      <p class="tiny muted" style="margin-top:.5rem">
+        {{ imported }} compan{{ 'y' if imported == 1 else 'ies' }} in this
+        organization arrived by import.
+      </p>
+    </div>
+  </div>
+</div>
+
+<h2>History</h2>
+<div class="card pad0"><div class="tablewrap"><table>
+  <thead><tr><th>When</th><th>File</th><th>Source</th><th>By</th><th>Status</th>
+    <th class="num">Landed</th><th></th></tr></thead>
+  <tbody>
+  {% for h in history %}
+    <tr>
+      <td class="tiny muted nowrap">{{ h.row.created_at|since }}</td>
+      <td class="small">{{ h.row.filename }}</td>
+      <td><span class="badge neutral">{{ sources.get(h.row.source, h.row.source) }}</span></td>
+      <td class="tiny muted">{{ h.row.user_name or '—' }}</td>
+      <td><span class="badge {{ 'good' if h.row.status == 'applied' else 'warm' if h.row.status == 'preview' else 'neutral' }}">{{ h.row.status }}</span></td>
+      <td class="num tiny">
+        {% if h.report %}
+          {{ h.report.created.contacts }} contacts · {{ h.report.created.targets }} targets
+        {% else %}—{% endif %}
+      </td>
+      <td class="num"><a class="btn btn-ghost btn-sm" href="{{ url_for('import_preview', import_id=h.row.id) }}">Open</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="empty">Nothing imported yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div></div>
+{% endblock %}
