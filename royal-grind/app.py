@@ -40,6 +40,7 @@ import ai_engine
 import auth
 import compliance
 import enrichment
+import importer
 import sequences as seq_engine
 import signal_engine
 import telephony
@@ -1649,6 +1650,133 @@ def sequences_run():
     done = seq_engine.run(g.conn, org_id)
     flash(f"{len(done)} step(s) materialized." if done else "Nothing was due.")
     return redirect(url_for("sequences_view"))
+
+
+# ===========================================================================
+# Import
+# ===========================================================================
+
+@app.route("/import", methods=["GET", "POST"])
+@auth.role_required("admin")
+def data_import():
+    """
+    Upload a prospect list.
+
+    Admin-only: an import writes companies, contacts and dialable numbers across
+    the whole org, and it is the most likely way a suppressed number re-enters
+    the database. That is not a per-rep action.
+    """
+    org_id = auth.current_org_id()
+
+    if request.method == "POST":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            flash("Choose a CSV export first.")
+            return redirect(url_for("data_import"))
+        try:
+            text = upload.read().decode("utf-8-sig", errors="replace")
+        except Exception:
+            flash("That file could not be read as text. Export as CSV, not XLSX.")
+            return redirect(url_for("data_import"))
+
+        rows, source, headers = importer.parse_csv(text)
+        if not rows:
+            flash("No data rows found in that file. Check it has a header row.")
+            return redirect(url_for("data_import"))
+
+        options = {
+            "trust_vendor": request.form.get("trust_vendor") == "1",
+            "default_rep_id": request.form.get("default_rep_id", type=int),
+        }
+        import_id = g.conn.execute(
+            """INSERT INTO imports (org_id, user_id, source, filename, raw_csv,
+                                    options_json, status, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (org_id, g.user["id"], source, upload.filename[:200], text,
+             json.dumps(options), "preview",
+             datetime.now().isoformat(timespec="seconds"))).lastrowid
+        g.conn.commit()
+        auth.audit(g.conn, "import.upload", f"import:{import_id}",
+                   detail={"source": source, "rows": len(rows),
+                           "filename": upload.filename[:200]})
+        return redirect(url_for("import_preview", import_id=import_id))
+
+    history = g.conn.execute(
+        """SELECT i.*, u.name AS user_name FROM imports i
+        LEFT JOIN users u ON u.id = i.user_id AND u.org_id = i.org_id
+            WHERE i.org_id = ? ORDER BY i.id DESC LIMIT 20""", (org_id,)).fetchall()
+    parsed = [{"row": h, "report": _loads(h["report_json"])} for h in history]
+
+    reps = g.conn.execute(
+        "SELECT * FROM reps WHERE org_id = ? AND status = 'active' ORDER BY name",
+        (org_id,)).fetchall()
+    # Counted from the applied reports rather than from a column: the seed sets
+    # an external_id on every company, so that column cannot distinguish a row
+    # that arrived by import from one that was always here.
+    imported = sum((_loads(h["report_json"], {}) or {}).get("created", {}).get("companies", 0)
+                   for h in history if h["status"] == "applied")
+    return render_template("import.html", history=parsed, reps=reps, imported=imported,
+                           sources=importer.SOURCE_LABELS)
+
+
+@app.route("/import/<int:import_id>")
+@auth.role_required("admin")
+def import_preview(import_id):
+    """What the import would do. Read-only — nothing is written until Apply."""
+    row = auth.scoped_one(g.conn, "imports", import_id)
+    rows, source, headers = importer.parse_csv(row["raw_csv"], row["source"])
+    options = _loads(row["options_json"], {}) or {}
+    result = importer.plan(g.conn, row["org_id"], rows, source, options)
+    rep_names = {r["id"]: r["name"] for r in g.conn.execute(
+        "SELECT id, name FROM reps WHERE org_id = ?", (row["org_id"],)).fetchall()}
+    return render_template("import_preview.html", imp=row, plan=result,
+                           headers=headers, options=options, rep_names=rep_names,
+                           report=_loads(row["report_json"]))
+
+
+@app.route("/import/<int:import_id>/apply", methods=["POST"])
+@auth.role_required("admin")
+def import_apply(import_id):
+    row = auth.scoped_one(g.conn, "imports", import_id)
+    if row["status"] != "preview":
+        flash(f"That import was already {row['status']}.")
+        return redirect(url_for("import_preview", import_id=import_id))
+
+    rows, source, _headers = importer.parse_csv(row["raw_csv"], row["source"])
+    options = _loads(row["options_json"], {}) or {}
+    report = importer.apply(g.conn, row["org_id"], rows, source, g.user["id"], options)
+
+    g.conn.execute(
+        """UPDATE imports SET status = 'applied', report_json = ?, applied_at = ?
+            WHERE id = ? AND org_id = ?""",
+        (json.dumps(report), report["applied_at"], import_id, row["org_id"]))
+    g.conn.commit()
+
+    # Score what just landed, so the new rows appear on a list rather than
+    # sitting at zero until something else happens to trigger a rescore.
+    org = _org()
+    scored = signal_engine.load_and_score(g.conn, org, statuses=("new",))
+    signal_engine.persist_scores(g.conn, scored)
+
+    auth.audit(g.conn, "import.apply", f"import:{import_id}", detail=report["created"])
+    created = report["created"]
+    flash(f"Imported {created['contacts']} contacts at {created['companies']} new "
+          f"companies, and put {created['targets']} on the board.")
+    return redirect(url_for("import_preview", import_id=import_id))
+
+
+@app.route("/import/<int:import_id>/discard", methods=["POST"])
+@auth.role_required("admin")
+def import_discard(import_id):
+    row = auth.scoped_one(g.conn, "imports", import_id)
+    if row["status"] == "applied":
+        flash("An applied import cannot be discarded — the rows are already in.")
+        return redirect(url_for("import_preview", import_id=import_id))
+    g.conn.execute("UPDATE imports SET status = 'discarded' WHERE id = ? AND org_id = ?",
+                   (import_id, row["org_id"]))
+    g.conn.commit()
+    flash("Discarded. Nothing was written.")
+    return redirect(url_for("data_import"))
 
 
 # ===========================================================================

@@ -89,9 +89,10 @@ Before wiring one up, read its licence terms on **what you may store and for how
 long**. Most B2B data contracts restrict retention and redistribution, and those
 terms interact directly with `orgs.retention_days`.
 
-There is no company/contact *discovery* provider. Companies arrive by seed, by
-`/signup` plus manual entry, or by whatever import you build. A CSV importer is
-the obvious next module and is not written.
+There is no company/contact *discovery* provider — nothing here goes looking for
+companies you have not heard of. They arrive by CSV import (`/import`, see
+`importer.py`), by manual entry, or by the demo seed. Buying a discovery API and
+scheduling it against `plan()`/`apply()` is the natural next module.
 
 ### The model — `ai_engine.py`
 
@@ -131,6 +132,10 @@ SQLite locally; Postgres in production via `DATABASE_URL`. `db.py` translates th
 three constructs this codebase uses — placeholders, `lastrowid`, and
 `INSERT OR IGNORE` — and derives the Postgres DDL from the same `schema.sql`
 rather than maintaining a second copy that silently drifts.
+
+**Schema note.** `schema.sql` gained an `imports` table. It is a `DROP`/`CREATE`
+schema with no migration runner, so an existing database needs that table added
+by hand before `/import` will work.
 
 **The Postgres path has not been run against a live server.** On first deploy,
 open a shell and run:
@@ -206,9 +211,11 @@ weekly        python3 compliance.py --purge --apply
 python3 smoke_test.py
 ```
 
-160 checks against a scratch database: every route, every role boundary, the
+217 checks against a scratch database: every route, every role boundary, the
 whole call loop from dial to logged debrief, the learning loop's clamps, the data
-layer's decay and dial feedback, cadence entry and exit, tenant isolation, webhook
-signing, CSRF, subject access and erasure, and the production config guard.
+layer's decay and dial feedback, cadence entry and exit, CSV import (parsing,
+planning, idempotent re-apply, provenance, and the suppression check), tenant
+isolation, webhook signing, CSRF, subject access and erasure, and the production
+config guard.
 
 It needs no API key and places no calls. CI runs it on every push.

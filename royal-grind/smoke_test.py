@@ -16,6 +16,7 @@ the phone layer to the simulator, so CI exercises the path a fresh clone takes
 and never spends money to tell you a template renders.
 """
 
+import io
 import json
 import os
 import sys
@@ -38,6 +39,7 @@ import app as application                          # noqa: E402
 import auth                                        # noqa: E402
 import compliance                                  # noqa: E402
 import enrichment                                  # noqa: E402
+import importer                                    # noqa: E402
 import sequences as seq_engine                     # noqa: E402
 import signal_engine                               # noqa: E402
 import telephony                                   # noqa: E402
@@ -540,6 +542,223 @@ def main():
           all(isinstance(s["active_count"], int) for s in summary))
     c.close()
 
+    other = Session("owner@northgate.example")
+
+    # ---------------------------------------------------------------- import --
+    section("Prospect list import")
+    samples = Path(__file__).parent / "samples"
+
+    # Parsing, on the shapes these exports really contain.
+    check("money parses with a magnitude suffix", importer.parse_number("$74M") == 74_000_000)
+    check("money parses with separators", importer.parse_number("74,000,000") == 74_000_000)
+    check("a headcount range becomes its midpoint", importer.parse_number("201-500") == 350.5)
+    check("a suffixed range parses", importer.parse_number("$10M-$50M") == 30_000_000)
+    check("'1,000+' drops the plus", importer.parse_number("1,000+") == 1000)
+    check("ZoomInfo's 'in 000s' is scaled",
+          importer.parse_number("74000", thousands=True) == 74_000_000)
+    check("an unreadable cell is None, not zero", importer.parse_number("n/a") is None,
+          "zero is a claim; an unreadable cell is not one we may make")
+
+    # The substring bug this caught: "LTL" contains "tl".
+    check("LTL is not also tagged as truckload",
+          importer.parse_modes("LTL and expedited") == "ltl,expedited",
+          importer.parse_modes("LTL and expedited"))
+    check("'less than truckload' is LTL only",
+          importer.parse_modes("less than truckload") == "ltl")
+    check("free text maps to the mode vocabulary",
+          importer.parse_modes("Dry Van, Reefer and some flatbed") == "ftl,flatbed,reefer")
+    check("an unknown word is dropped rather than guessed",
+          importer.parse_modes("advance planning") == "")
+
+    check("a short phone is rejected with a reason",
+          importer.clean_phone("555-1234")[0] is None
+          and "7 digits" in importer.clean_phone("555-1234")[1])
+    check("phone formatting is normalized",
+          importer.clean_phone("(816) 555-0143")[0] == "+18165550143")
+    check("a malformed email is rejected",
+          importer.clean_email("not-an-email")[0] is None)
+
+    # Source detection on the shipped samples.
+    for filename, expected in (("zoominfo-export.csv", "zoominfo"),
+                               ("apollo-export.csv", "apollo"),
+                               ("broker-own-list.csv", "generic")):
+        rows, detected, headers = importer.parse_csv((samples / filename).read_text())
+        check(f"{filename} is read as {expected}", detected == expected, detected)
+        check(f"{filename} yields rows", len(rows) > 0)
+
+    c = conn()
+    org = c.execute("SELECT * FROM orgs WHERE id = ?", (org_id,)).fetchone()
+
+    zi_rows, zi_source, _ = importer.parse_csv((samples / "zoominfo-export.csv").read_text())
+    zi_plan = importer.plan(c, org_id, zi_rows, zi_source, {})
+
+    check("a row with no company is skipped with a reason",
+          any("no company name" in p for s in zi_plan["skips"] for p in s["problems"]))
+    check("a row with no contact name is skipped",
+          any("no contact name" in p for s in zi_plan["skips"] for p in s["problems"]))
+    check("every skipped row carries a reason",
+          all(s["problems"] for s in zi_plan["skips"]))
+    check("a repeat of the same person in one file is caught",
+          len(zi_plan["duplicates"]) == 1, str(zi_plan["duplicates"]))
+    check("the plan names the source it detected", zi_plan["source_label"] == "ZoomInfo")
+
+    # The plan must be read-only.
+    before_counts = {t: _count(t, org_id) for t in ("companies", "contacts", "targets")}
+    importer.plan(c, org_id, zi_rows, zi_source, {})
+    after_counts = {t: _count(t, org_id) for t in ("companies", "contacts", "targets")}
+    check("planning writes nothing", before_counts == after_counts)
+
+    # Apply.
+    report = importer.apply(c, org_id, zi_rows, zi_source, user_id=None, options={})
+    check("apply creates companies", report["created"]["companies"] > 0)
+    check("apply creates contacts", report["created"]["contacts"] > 0)
+    check("apply puts them on the board", report["created"]["targets"] > 0)
+
+    # Two contacts at one company must not become two companies. This is the bug
+    # that keying a company on the export's contact id produces.
+    brightline = c.execute(
+        "SELECT COUNT(*) n FROM companies WHERE org_id = ? AND name = 'Brightline Castings'",
+        (org_id,)).fetchone()["n"]
+    check("two contacts at one firm make one company", brightline == 1, f"{brightline} rows")
+
+    # Provenance: nothing a vendor asserted becomes ours by default.
+    laundered = c.execute(
+        """SELECT COUNT(*) n FROM contact_points
+            WHERE org_id = ? AND status = 'verified' AND method LIKE '%imported from%'""",
+        (org_id,)).fetchone()["n"]
+    check("a vendor's verification is not laundered into ours", laundered == 0,
+          f"{laundered} imported points claim to be verified")
+
+    trusted_plan = importer.plan(c, org_id, zi_rows, zi_source, {"trust_vendor": True})
+    trusted_emails = [pt for e in trusted_plan["creates"] + trusted_plan["updates"]
+                      for pt in e["points"] if pt["kind"] == "email"]
+    check("opting in does promote the vendor's verification",
+          any(pt["status"] == "verified" for pt in trusted_emails))
+    check("and it still records whose claim it was",
+          all("accepted at face value" in pt["method"]
+              for pt in trusted_emails if pt["status"] == "verified"))
+
+    # Re-import is an update, not a duplicate.
+    counts_before = {t: _count(t, org_id) for t in
+                     ("companies", "contacts", "contact_points", "targets")}
+    again = importer.apply(c, org_id, zi_rows, zi_source, user_id=None, options={})
+    counts_after = {t: _count(t, org_id) for t in
+                    ("companies", "contacts", "contact_points", "targets")}
+    check("re-importing the same file writes nothing new", counts_before == counts_after,
+          f"{counts_before} -> {counts_after}")
+    check("the re-import reports zero creates",
+          sum(again["created"].values()) == 0, str(again["created"]))
+
+    # An import must not overwrite what a rep learned by asking.
+    target_company = c.execute(
+        "SELECT * FROM companies WHERE org_id = ? AND name = 'Brightline Castings'",
+        (org_id,)).fetchone()
+    c.execute("UPDATE companies SET loads_per_month = 38 WHERE id = ?",
+              (target_company["id"],))
+    c.commit()
+    importer.apply(c, org_id, zi_rows, zi_source, user_id=None, options={})
+    kept = c.execute("SELECT loads_per_month FROM companies WHERE id = ?",
+                     (target_company["id"],)).fetchone()["loads_per_month"]
+    check("a re-import fills blanks but does not overwrite", kept == 38, f"got {kept}")
+
+    # Timezone comes from the state, because the dial gate runs on it.
+    broker_rows, broker_source, _ = importer.parse_csv(
+        (samples / "broker-own-list.csv").read_text())
+    apollo_rows, apollo_source, _ = importer.parse_csv(
+        (samples / "apollo-export.csv").read_text())
+    importer.apply(c, org_id, apollo_rows, apollo_source, user_id=None, options={})
+    california = c.execute(
+        "SELECT timezone FROM companies WHERE org_id = ? AND name = 'Orchard Gate Produce'",
+        (org_id,)).fetchone()
+    check("a California company gets a Pacific timezone",
+          california and california["timezone"] == "America/Los_Angeles",
+          california["timezone"] if california else "missing")
+
+    # Suppression. The number in broker-own-list.csv collides with a seeded
+    # do-not-call entry on purpose.
+    broker_plan = importer.plan(c, org_id, broker_rows, broker_source, {})
+    check("a suppressed number is flagged before anything is written",
+          len(broker_plan["suppressed"]) == 1, str(broker_plan["suppressed"]))
+    importer.apply(c, org_id, broker_rows, broker_source, user_id=None, options={})
+    blocked_point = c.execute(
+        """SELECT cp.* FROM contact_points cp JOIN contacts ct ON ct.id = cp.contact_id
+            WHERE cp.org_id = ? AND ct.name = 'Wes Dombrowski' AND cp.kind = 'direct_dial'""",
+        (org_id,)).fetchone()
+    check("a suppressed number imports as invalid, not dialable",
+          blocked_point and blocked_point["status"] == "invalid",
+          blocked_point["status"] if blocked_point else "missing")
+    check("and it records why",
+          blocked_point and "suppression list" in blocked_point["method"])
+
+    blocked_target = c.execute(
+        """SELECT t.id, t.rep_id FROM targets t JOIN contacts ct ON ct.id = t.contact_id
+            WHERE t.org_id = ? AND ct.name = 'Wes Dombrowski'""", (org_id,)).fetchone()
+    blocked_scored = signal_engine.load_and_score(
+        c, org, target_ids=[blocked_target["id"]])[0]
+    check("the imported suppressed target is blocked from the list",
+          bool(blocked_scored["blockers"]), str(blocked_scored["blockers"]))
+    live_now, _all = signal_engine.daily_list(c, org, blocked_target["rep_id"], size=500)
+    check("and it never reaches the daily list",
+          not any(r["target"]["id"] == blocked_target["id"] for r in live_now))
+
+    # An owner column that names nobody here is reported, not silently reassigned.
+    apollo_plan = importer.plan(c, org_id, apollo_rows, apollo_source, {})
+    check("an unrecognized owner is surfaced",
+          "nobody@elsewhere.example" in apollo_plan["unmatched_owners"],
+          str(apollo_plan["unmatched_owners"]))
+    c.close()
+
+    # The routes.
+    r = owner.get("/import")
+    check("GET /import", r.status_code == 200)
+    check("a manager cannot reach the importer",
+          manager.get("/import").status_code == 403)
+    check("a member cannot reach the importer",
+          member.get("/import").status_code == 403)
+
+    csv_bytes = (samples / "broker-own-list.csv").read_bytes()
+    r = owner.post("/import", data={
+        "file": (io.BytesIO(csv_bytes), "broker-own-list.csv"),
+        "default_rep_id": str(rep_id)},
+        content_type="multipart/form-data")
+    check("uploading a CSV lands on the preview",
+          r.status_code == 200 and b"Tarver Mill Supply" in r.data,
+          "expected the preview to render rows from the uploaded file")
+
+    r = owner.post("/import", data={"default_rep_id": str(rep_id)},
+                   content_type="multipart/form-data")
+    check("uploading nothing is refused", b"Choose a CSV export first" in r.data)
+    r = owner.post("/import", data={
+        "file": (io.BytesIO(b"not,a,prospect,list\n"), "empty.csv")},
+        content_type="multipart/form-data")
+    check("a file with no data rows is refused", b"No data rows found" in r.data)
+
+    c = conn()
+    pending = c.execute(
+        "SELECT * FROM imports WHERE org_id = ? ORDER BY id DESC LIMIT 1",
+        (org_id,)).fetchone()
+    c.close()
+    check("the upload is stored for preview", pending is not None
+          and pending["status"] == "preview")
+    check("the stored upload keeps the raw bytes",
+          pending is not None and "Tarver Mill Supply" in pending["raw_csv"])
+    check("GET the preview renders",
+          owner.get(f"/import/{pending['id']}").status_code == 200)
+
+    r = owner.post(f"/import/{pending['id']}/apply")
+    check("applying the import succeeds", r.status_code == 200)
+    c = conn()
+    applied = c.execute("SELECT * FROM imports WHERE id = ?", (pending["id"],)).fetchone()
+    c.close()
+    check("the import is marked applied", applied["status"] == "applied")
+    check("the import stores its report", bool(applied["report_json"]))
+    check("applying twice is refused",
+          b"already applied" in owner.post(f"/import/{pending['id']}/apply").data)
+
+    # Another tenant cannot read or apply this import.
+    check("another tenant cannot open the import",
+          other.get(f"/import/{pending['id']}").status_code == 404)
+
     # ------------------------------------------------------------- AI engine --
     section("The AI layer falls back cleanly")
     c = conn()
@@ -596,7 +815,6 @@ def main():
           owner.post(f"/contact/{other_contact['id']}/verify",
                      follow_redirects=False).status_code == 404)
 
-    other = Session("owner@northgate.example")
     r = other.get("/")
     check("the other tenant sees its own list", r.status_code == 200)
     check("the other tenant does not see our companies",

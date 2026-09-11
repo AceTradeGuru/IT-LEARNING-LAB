@@ -75,6 +75,12 @@ and the specific contacts to fix first with a button next to each.
 **7. Executive view** (`/exec`) — pipeline sourced by the platform, hours per
 meeting, win rate, and the model bill, with the arithmetic shown.
 
+**8. Import a list** (`/import`) — drop in `samples/zoominfo-export.csv`. It reads
+the header row, says *"read as a ZoomInfo export"*, and shows you exactly what
+would land: six new contacts at five companies, two rows skipped with the reason
+on each, one duplicate caught, and every number rendered in the colour of how
+much it can be trusted. Nothing is written until you press Apply.
+
 ## Why not "a better ZoomInfo"
 
 The strategy this was built from rates the parts honestly: a modern dashboard is
@@ -262,6 +268,54 @@ where the money is. `sequences.py` runs cadences under three rules:
 3. **Weekends do not count.** A three-day follow-up scheduled on a Thursday lands
    on Sunday, and a task due Sunday is a task done Tuesday.
 
+## Getting your own list in
+
+`/import` (admin only) takes a CSV from ZoomInfo, Apollo, Salesforce or HubSpot —
+or your own spreadsheet — and lands it as companies, contacts, contact points and
+assigned targets. It reads the header row to work out which platform produced it,
+so nobody hand-maps twenty columns on their first run. Three sample files are in
+[`samples/`](samples/) if you want to see it work before exporting anything.
+
+It handles the shapes these exports really contain: `$74M`, `74,000,000`,
+`201-500` (midpoint), `1,000+`, ZoomInfo's *"Revenue (in 000s USD)"*, phone
+numbers in five formats, and a **Freight modes** column that no CRM has and a
+broker's own list usually does. A cell it cannot read stays empty rather than
+becoming zero — zero is a claim, and an unreadable cell is not one we are
+entitled to make.
+
+Four things make it more than a CSV loader.
+
+**It does not launder somebody else's confidence.** This is the thesis of the
+product applied to its own front door. A vendor marking an address *"Verified"*
+is their claim, on their date, by a method you cannot inspect. Importing that as
+our `verified` would mean a rep sees the same green badge for a number you dialed
+last Tuesday and one a list broker asserted for reasons nobody can check. So by
+default it lands as **probable**, with the vendor's exact wording preserved in
+`method`, and your first connect promotes it to `verified` for real. There is a
+checkbox to take them at their word, it is off by default, and the sentence next
+to it says what turning it on costs you.
+
+**It checks the suppression list before it writes a dialable row.** An import is
+the likeliest way a number somebody asked you never to call again gets back into
+the database. Matching rows still import — the company is still real — but the
+number is written `invalid` with the reason, so it can never reach a call list.
+The smoke test asserts that end to end: the number lands invalid, the target
+carries a blocker, and it never appears on the daily list.
+
+**It previews, then applies.** `plan()` is read-only and returns exactly what
+would be created, updated and skipped, with a reason on every skipped row and
+every in-file duplicate named by line number. An import that surprises you is one
+you cannot trust with a book of business.
+
+**Re-importing is the point, not a hazard.** Companies are keyed on the source's
+own *company* id, else domain, else name + state; contacts on email, else name
+within the company. Deliberately **not** on the contact id every one of these
+exports carries — two people at one firm would import as two companies, each with
+its own call-list entry, and a rep would dial the same switchboard twice. And a
+re-import **fills blanks only**: a rep who wrote "38 loads a month" after asking
+the customer holds better data than a vendor's estimate, and the second import
+must not quietly undo that.
+
 ## The seed
 
 A Kansas City brokerage: 6 reps, 205 companies, 347 contacts, 822 contact points,
@@ -293,6 +347,9 @@ ai_engine.py      Claude-backed research, call plans, call analysis, email,
                   plain-English search — each with an offline fallback
 telephony.py      Vonage Voice API + a call simulator, behind one interface
 enrichment.py     Provenance, verification, decay, and dial-result feedback
+importer.py       ZoomInfo / Apollo / Salesforce / HubSpot / generic CSV import —
+                  sniffing, provenance that is not laundered, suppression check,
+                  dry-run planning, idempotent apply
 compliance.py     Suppression, quiet hours, recording consent, subject rights
 sequences.py      Cadence automation that exits the moment a human replies
 auth.py           Login, roles, tenant scoping, CSRF, audit trail
@@ -300,7 +357,8 @@ db.py             SQLite locally, Postgres in production
 config.py         Environment-driven settings with a fail-fast production guard
 grind_db.py       Schema build and demo seed
 schema.sql        Nineteen tables across five surfaces
-smoke_test.py     160 end-to-end checks, including the ones that must fail
+samples/          Three deliberately messy CSVs the importer is tested against
+smoke_test.py     217 end-to-end checks, including the ones that must fail
 templates/        Jinja templates, one inline design system in base.html
 ```
 
@@ -319,9 +377,9 @@ writing anything; without it, it is an open endpoint that writes transcripts int
 a multi-tenant database and whose URL lives in a third party's config screen.
 
 `smoke_test.py` asserts the failures: a member gets 403 on another rep's
-prospect, one tenant gets 404 on another's records by id, an unsigned webhook is
-refused, a POST without a CSRF token is rejected, and a production config missing
-a `SECRET_KEY` refuses to boot.
+prospect, one tenant gets 404 on another's records by id (including on an
+import), an unsigned webhook is refused, a POST without a CSRF token is rejected,
+and a production config missing a `SECRET_KEY` refuses to boot.
 
 ## Status
 

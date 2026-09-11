@@ -192,7 +192,8 @@ def scoped_one(conn, table, row_id):
     # tenant-owned entity means adding it here — the ValueError is the reminder.
     if table not in {"reps", "companies", "contacts", "contact_points",
                      "triggers", "targets", "calls", "tasks", "emails", "deals",
-                     "sequences", "enrollments", "suppression", "saved_searches"}:
+                     "sequences", "enrollments", "suppression", "saved_searches",
+                     "imports"}:
         raise ValueError(f"scoped_one called on unexpected table: {table}")
     row = conn.execute(
         f"SELECT * FROM {table} WHERE id = ? AND org_id = ?",

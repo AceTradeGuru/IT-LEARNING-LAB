@@ -346,6 +346,9 @@
       <a href="{{ url_for('search') }}" class="{{ 'on' if request.endpoint == 'search' }}">Prospect search</a>
       <a href="{{ url_for('companies') }}" class="{{ 'on' if request.endpoint in ('companies','company_detail') }}">Companies</a>
       <a href="{{ url_for('data_quality') }}" class="{{ 'on' if request.endpoint == 'data_quality' }}">Data quality</a>
+      {% if has_role('admin') %}
+        <a href="{{ url_for('data_import') }}" class="{{ 'on' if request.endpoint in ('data_import','import_preview') }}">Import a list</a>
+      {% endif %}
       <div class="navgroup">What we've learned</div>
       <a href="{{ url_for('intelligence') }}" class="{{ 'on' if request.endpoint == 'intelligence' }}">Signal performance</a>
       {% if has_role('manager') %}

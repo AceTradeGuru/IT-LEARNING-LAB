@@ -35,6 +35,7 @@ DROP TABLE IF EXISTS contact_points;
 DROP TABLE IF EXISTS contacts;
 DROP TABLE IF EXISTS companies;
 DROP TABLE IF EXISTS suppression;
+DROP TABLE IF EXISTS imports;
 DROP TABLE IF EXISTS saved_searches;
 DROP TABLE IF EXISTS ai_spend;
 DROP TABLE IF EXISTS audit_log;
@@ -447,6 +448,25 @@ CREATE TABLE suppression (
     created_at      TEXT NOT NULL
 );
 CREATE UNIQUE INDEX idx_suppression ON suppression (org_id, kind, value);
+
+-- One row per uploaded prospect list. The raw CSV is kept so that applying an
+-- import re-plans from the same bytes rather than from a serialized plan: an
+-- import approved an hour after it was previewed then sees the database as it
+-- is now, and a contact somebody added in between is an update, not a duplicate.
+CREATE TABLE imports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id      INTEGER NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    user_id     INTEGER,
+    source      TEXT NOT NULL,          -- zoominfo | apollo | salesforce | hubspot | generic
+    filename    TEXT,
+    raw_csv     TEXT NOT NULL,
+    options_json TEXT DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'preview',   -- preview | applied | discarded
+    report_json TEXT,
+    created_at  TEXT NOT NULL,
+    applied_at  TEXT
+);
+CREATE INDEX idx_imports_org ON imports (org_id, created_at);
 
 CREATE TABLE saved_searches (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
